@@ -15,6 +15,7 @@
       "supportsTablet": true
     },
     "android": {
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#090D1A",
         "foregroundImage": "./assets/android-icon-foreground.png",
