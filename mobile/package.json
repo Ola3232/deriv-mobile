@@ -1,21 +1,38 @@
 {
-  "name": "deriv-alert-backend",
+  "name": "deriv-alert",
   "version": "1.0.0",
-  "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
   },
   "dependencies": {
-    "axios": "^1.5.0",
-    "cors": "^2.8.5",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/native": "^7.2.2",
+    "@react-navigation/native-stack": "^7.14.10",
+    "axios": "^1.13.6",
     "expo": "~55.0.15",
+    "expo-device": "~55.0.15",
     "expo-notifications": "~55.0.19",
     "expo-secure-store": "~14.2.0",
-    "express": "^4.18.2",
-    "pg": "^8.11.3",
+    "expo-status-bar": "~55.0.5",
     "react": "19.2.0",
+    "react-dom": "19.2.0",
     "react-native": "0.83.4",
-    "ws": "^8.17.0"
+    "react-native-gesture-handler": "~2.30.0",
+    "react-native-paper": "^5.15.0",
+    "react-native-reanimated": "4.2.1",
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-screens": "~4.23.0",
+    "react-native-web": "^0.21.0",
+    "react-native-worklets": "0.7.2",
+    "ws": "^8.19.0"
+  },
+  "private": true,
+  "devDependencies": {
+    "@types/react": "~19.2.10",
+    "typescript": "~5.9.2"
   }
 }
