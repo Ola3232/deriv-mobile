@@ -14,15 +14,17 @@ import {
   RefreshControl,
   ScrollView,
   SectionList,
+  Platform,
 } from "react-native";
 
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
+import * as SecureStore from "expo-secure-store";
 
 /* ============================================================
    CONFIG
 ============================================================ */
-const SERVER = "https://deriv-backend-8b4w.onrender.com";
+const SERVER = "https://deriv-backend-1.onrender.com";
 
 const C = {
   bg:      "#090D1A",
@@ -40,18 +42,41 @@ const C = {
 };
 
 /* ============================================================
-   NOTIFICATIONS
+   NOTIFICATIONS — canal Android haute priorité + son
 ============================================================ */
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
+    shouldShowAlert:  true,
+    shouldPlaySound:  true,
+    shouldSetBadge:   true,
+    priority:         Notifications.AndroidNotificationPriority.MAX,
   }),
 });
 
+// Crée le canal Android une seule fois au démarrage
+async function setupNotificationChannel() {
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("deriv-alerts", {
+      name:                 "Deriv Price Alerts",
+      importance:           Notifications.AndroidImportance.MAX,
+      sound:                "default",
+      vibrationPattern:     [0, 250, 150, 250, 150, 500],
+      enableVibrate:        true,
+      enableLights:         true,
+      lightColor:           "#00C8F8",
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      bypassDnd:            true,          // passe en mode Ne pas déranger
+      showBadge:            true,
+    });
+  }
+}
+
 async function registerForPushNotifications() {
   if (!Device.isDevice) return null;
+
+  // Créer le canal AVANT de demander le token
+  await setupNotificationChannel();
+
   const { status: existing } = await Notifications.getPermissionsAsync();
   let final = existing;
   if (existing !== "granted") {
@@ -70,7 +95,7 @@ async function registerForPushNotifications() {
 }
 
 /* ============================================================
-   safeFetch — vérifie Content-Type avant de parser JSON
+   safeFetch
 ============================================================ */
 async function safeFetch(url, options = {}) {
   const res         = await fetch(url, options);
@@ -85,28 +110,35 @@ async function safeFetch(url, options = {}) {
 }
 
 /* ============================================================
+   USER ID — identifiant unique persistant par appareil
+============================================================ */
+async function getUserId() {
+  try {
+    let uid = await SecureStore.getItemAsync("userId");
+    if (!uid) {
+      uid = "user_" + Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
+      await SecureStore.setItemAsync("userId", uid);
+    }
+    return uid;
+  } catch {
+    return "user_default";
+  }
+}
+
+/* ============================================================
    COMPOSANT : CARTE ALERTE
-   Correction suppression :
-   - On utilise TouchableOpacity au lieu de Pressable (plus fiable dans ScrollView)
-   - La suppression est directe : pas de Alert.alert qui peut bloquer sur certains OS
-     → on utilise un modal de confirmation maison pour éviter les conflits natifs
 ============================================================ */
 const AlertCard = ({ item, onDelete }) => {
   const isOver  = item.condition === "over";
   const isFired = item.fired === 1;
 
-  // Suppression directe sans confirmation native
-  // (Alert.alert peut être bloqué par le ScrollView sur Android)
   const doDelete = () => onDelete(item.id);
 
   return (
     <View style={[s.alertCard, isFired && s.alertCardFired]}>
-      {/* Barre couleur gauche */}
       <View style={[s.stripe, {
         backgroundColor: isFired ? C.amber : isOver ? C.green : C.red,
       }]} />
-
-      {/* Contenu */}
       <View style={s.alertBody}>
         <View style={s.alertRow1}>
           <Text style={s.alertAsset}>{item.asset}</Text>
@@ -128,8 +160,6 @@ const AlertCard = ({ item, onDelete }) => {
           )}
         </View>
       </View>
-
-      {/* Bouton supprimer — TouchableOpacity simple, zone large */}
       <TouchableOpacity
         style={s.deleteBtn}
         activeOpacity={0.6}
@@ -142,8 +172,7 @@ const AlertCard = ({ item, onDelete }) => {
 };
 
 /* ============================================================
-   COMPOSANT : MODAL CONFIRMATION SUPPRESSION
-   (remplace Alert.alert natif qui cause des problèmes sur Android dans ScrollView)
+   MODAL CONFIRMATION SUPPRESSION
 ============================================================ */
 const DeleteConfirmModal = ({ visible, assetName, price, onConfirm, onCancel }) => (
   <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
@@ -168,7 +197,7 @@ const DeleteConfirmModal = ({ visible, assetName, price, onConfirm, onCancel }) 
 );
 
 /* ============================================================
-   COMPOSANT : MODAL SÉLECTION D'ACTIF
+   MODAL SÉLECTION D'ACTIF
 ============================================================ */
 const AssetPickerModal = ({ visible, onClose, onSelect, selected }) => {
   const [search,  setSearch]  = useState("");
@@ -183,43 +212,41 @@ const AssetPickerModal = ({ visible, onClose, onSelect, selected }) => {
       try {
         const { ok, status, data } = await safeFetch(`${SERVER}/symbols`);
         if (status === 503 && data.error === "loading") {
-          if (attempt < 4) { await new Promise((r) => setTimeout(r, 3000)); continue; }
-          throw new Error("Le serveur charge les actifs, réessaie dans quelques secondes.");
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
         }
-        if (!ok) throw new Error(data.error || `Erreur HTTP ${status}`);
-        if (!data.markets || Object.keys(data.markets).length === 0)
-          throw new Error("Aucun actif reçu du serveur.");
-        setMarkets(data.markets);
+        if (!ok) throw new Error(data.error || "Erreur serveur");
+        setMarkets(data.markets || {});
         setLoading(false);
         return;
       } catch (err) {
         if (attempt === 4) {
-          setError(err.message || "Impossible de charger les actifs.");
+          setError(err.message);
           setLoading(false);
+        } else {
+          await new Promise(r => setTimeout(r, 2000));
         }
       }
     }
   }, []);
 
   useEffect(() => {
-    if (!visible) { setSearch(""); return; }
-    fetchSymbols();
-  }, [visible]);
+    if (visible) fetchSymbols();
+  }, [visible, fetchSymbols]);
 
   const sections = useMemo(() => {
     const q = search.toLowerCase().trim();
     return Object.entries(markets)
-      .map(([marketName, symbols]) => ({
-        title: marketName,
+      .map(([market, items]) => ({
+        title: market,
         data: q
-          ? symbols.filter(
-              (sym) =>
-                sym.symbol.toLowerCase().includes(q) ||
-                sym.display_name.toLowerCase().includes(q)
+          ? items.filter(i =>
+              i.symbol.toLowerCase().includes(q) ||
+              i.display_name.toLowerCase().includes(q)
             )
-          : symbols,
+          : items,
       }))
-      .filter((sec) => sec.data.length > 0);
+      .filter(s => s.data.length > 0);
   }, [markets, search]);
 
   return (
@@ -229,95 +256,59 @@ const AssetPickerModal = ({ visible, onClose, onSelect, selected }) => {
         <View style={s.pickerSheet}>
           <View style={s.pickerHeader}>
             <Text style={s.pickerTitle}>CHOISIR UN ACTIF</Text>
-            <TouchableOpacity hitSlop={16} onPress={onClose}>
+            <TouchableOpacity onPress={onClose}>
               <Text style={s.pickerClose}>✕</Text>
             </TouchableOpacity>
           </View>
-
           <View style={s.searchWrap}>
             <Text style={s.searchIcon}>🔍</Text>
             <TextInput
               style={s.searchInput}
-              placeholder="Bitcoin, EUR/USD, Boom 1000…"
+              placeholder="Rechercher..."
               placeholderTextColor={C.muted}
               value={search}
               onChangeText={setSearch}
-              autoCapitalize="none"
               autoCorrect={false}
             />
-            {search.length > 0 && (
-              <TouchableOpacity onPress={() => setSearch("")}>
-                <Text style={{ color: C.muted, fontSize: 16, paddingHorizontal: 4 }}>✕</Text>
-              </TouchableOpacity>
-            )}
           </View>
-
           {loading && (
             <View style={s.pickerState}>
               <ActivityIndicator color={C.accent} size="large" />
-              <Text style={s.pickerStateText}>
-                Chargement des actifs Deriv…{"\n"}
-                <Text style={{ color: C.muted, fontSize: 11 }}>
-                  (peut prendre quelques secondes au démarrage)
-                </Text>
-              </Text>
+              <Text style={s.pickerStateText}>Chargement des actifs...</Text>
             </View>
           )}
-
           {error && !loading && (
             <View style={s.pickerState}>
-              <Text style={{ fontSize: 36, marginBottom: 12 }}>⚠️</Text>
-              <Text style={[s.pickerStateText, { color: C.red, marginBottom: 16 }]}>{error}</Text>
-              <TouchableOpacity style={s.retryBtn} activeOpacity={0.7} onPress={fetchSymbols}>
-                <Text style={s.retryText}>↺  Réessayer</Text>
+              <Text style={{ color: C.red, textAlign: "center", marginBottom: 16 }}>{error}</Text>
+              <TouchableOpacity style={s.retryBtn} onPress={fetchSymbols}>
+                <Text style={s.retryText}>Réessayer</Text>
               </TouchableOpacity>
             </View>
           )}
-
-          {!loading && !error && sections.length === 0 && search.length > 0 && (
-            <View style={s.pickerState}>
-              <Text style={{ fontSize: 32, marginBottom: 10 }}>🔍</Text>
-              <Text style={s.pickerStateText}>Aucun actif pour « {search} »</Text>
-            </View>
-          )}
-
-          {!loading && !error && sections.length > 0 && (
+          {!loading && !error && (
             <SectionList
               sections={sections}
-              keyExtractor={(item) => item.symbol}
-              stickySectionHeadersEnabled
-              keyboardShouldPersistTaps="always"
-              contentContainerStyle={{ paddingBottom: 40 }}
+              keyExtractor={item => item.symbol}
               renderSectionHeader={({ section }) => (
                 <View style={s.sectionHeaderRow}>
                   <Text style={s.sectionHeaderText}>{section.title.toUpperCase()}</Text>
                 </View>
               )}
-              renderItem={({ item }) => {
-                const isSelected = selected === item.symbol;
-                return (
-                  <TouchableOpacity
-                    style={[s.assetRow, isSelected && s.assetRowSelected]}
-                    activeOpacity={0.7}
-                    onPress={() => { onSelect(item); onClose(); }}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={[s.assetRowSymbol, isSelected && { color: C.accent }]}>
-                        {item.symbol}
-                      </Text>
-                      <Text style={s.assetRowName} numberOfLines={1}>
-                        {item.display_name}
-                      </Text>
-                    </View>
-                    <View style={s.assetRowRight}>
-                      <View style={[s.marketDot, { backgroundColor: item.is_open ? C.green : C.muted }]} />
-                      {isSelected && (
-                        <Text style={{ color: C.accent, fontWeight: "700", marginLeft: 8, fontSize: 16 }}>✓</Text>
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              }}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[s.assetRow, item.symbol === selected && s.assetRowSelected]}
+                  onPress={() => { onSelect(item); onClose(); }}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.assetRowSymbol}>{item.symbol}</Text>
+                    <Text style={s.assetRowName}>{item.display_name}</Text>
+                  </View>
+                  <View style={s.assetRowRight}>
+                    <View style={[s.marketDot, { backgroundColor: item.is_open ? C.green : C.muted }]} />
+                  </View>
+                </TouchableOpacity>
+              )}
             />
           )}
         </View>
@@ -327,115 +318,180 @@ const AssetPickerModal = ({ visible, onClose, onSelect, selected }) => {
 };
 
 /* ============================================================
-   SCREEN PRINCIPAL
+   ÉCRAN PRINCIPAL
 ============================================================ */
-export default function HomeScreen() {
-  // Form
-  const [asset,        setAsset]        = useState(null);
-  const [price,        setPrice]        = useState("");
-  const [condition,    setCondition]    = useState("over");
-  const [pickerOpen,   setPickerOpen]   = useState(false);
-  const [submitting,   setSubmitting]   = useState(false);
-  const [successModal, setSuccessModal] = useState(false);
-  const [successData,  setSuccessData]  = useState(null);
+export default function HomeScreen({ navigation }) {
+  const [userId,       setUserId]       = useState(null);
+  const [alerts,       setAlerts]       = useState([]);
+  const [loadingAlerts,setLoadingAlerts] = useState(true);
+  const [alertsError,  setAlertsError]  = useState(null);
+  const [refreshing,   setRefreshing]   = useState(false);
 
-  // Confirmation suppression
-  const [deleteTarget, setDeleteTarget] = useState(null); // { id, asset, price }
+  // Formulaire
+  const [asset,      setAsset]      = useState(null);
+  const [condition,  setCondition]  = useState("over");
+  const [price,      setPrice]      = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError,  setFormError]  = useState(null);
 
-  // Liste alertes
-  const [alerts,      setAlerts]      = useState([]);
-  const [loadingList, setLoadingList] = useState(true);
-  const [refreshing,  setRefreshing]  = useState(false);
-  const [listError,   setListError]   = useState(null);
+  // Modals
+  const [pickerOpen,    setPickerOpen]    = useState(false);
+  const [successModal,  setSuccessModal]  = useState(null);
+  const [deleteModal,   setDeleteModal]   = useState(null); // { id, asset, price }
 
-  /* ---------- Charger alertes ---------- */
+  /* ---- Init userId ---- */
+  useEffect(() => {
+    getUserId().then(uid => setUserId(uid));
+  }, []);
+
+  /* ---- Enregistrement push ---- */
+  const [tokenStatus, setTokenStatus] = useState("...");
+
+  useEffect(() => {
+    (async () => {
+      if (!Device.isDevice) {
+        setTokenStatus("❌ Pas un vrai appareil (émulateur)");
+        return;
+      }
+      const { status: existing } = await Notifications.getPermissionsAsync();
+      let final = existing;
+      if (existing !== "granted") {
+        const { status } = await Notifications.requestPermissionsAsync();
+        final = status;
+      }
+      if (final !== "granted") {
+        setTokenStatus("❌ Permission refusée");
+        return;
+      }
+      try {
+        await setupNotificationChannel();
+        const { data: token } = await Notifications.getExpoPushTokenAsync({
+          projectId: "5025bb1c-7e81-44c6-9bdc-c054a317651c",
+        });
+        setTokenStatus("📲 Token obtenu, connexion serveur...");
+
+        // Sauvegarde token — raw fetch, affiche erreur exacte
+        let saved = false;
+        for (let attempt = 1; attempt <= 10; attempt++) {
+          try {
+            setTokenStatus(`⏳ Tentative ${attempt}/10...`);
+            const uid = await getUserId();
+            const res = await fetch(`${SERVER}/save-token`, {
+              method:  "POST",
+              headers: { "Content-Type": "application/json" },
+              body:    JSON.stringify({ token, user: uid }),
+            });
+            const text = await res.text();
+            setTokenStatus(`HTTP ${res.status} | ${text.slice(0, 60)}`);
+            let data = {};
+            try { data = JSON.parse(text); } catch {}
+
+            if (res.ok && data.saved) {
+              setTokenStatus("✅ Token enregistré !");
+              saved = true;
+              break;
+            }
+          } catch (err) {
+            setTokenStatus(`❌ Fetch err: ${err.message}`);
+          }
+          await new Promise(r => setTimeout(r, 5000));
+        }
+
+        if (!saved && !saved) setTokenStatus("❌ Échec après 10 tentatives");
+      } catch (e) {
+        setTokenStatus("❌ Erreur : " + e.message);
+      }
+    })();
+  }, []);
+
+  /* ---- Chargement alertes ---- */
   const loadAlerts = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const { ok, data } = await safeFetch(`${SERVER}/alerts`);
-      if (!ok) throw new Error(data.error || "Erreur serveur");
+      const uid = await getUserId();
+      const { ok, data } = await safeFetch(`${SERVER}/alerts?user=${uid}`);
+      if (!ok) throw new Error();
       setAlerts(data);
-      setListError(null);
-    } catch (e) {
-      setListError(e.message || "Impossible de charger les alertes.");
+      setAlertsError(null);
+    } catch {
+      setAlertsError("Impossible de charger les alertes.");
     } finally {
-      setLoadingList(false);
+      setLoadingAlerts(false);
       setRefreshing(false);
     }
   }, []);
 
-  /* ---------- Init ---------- */
   useEffect(() => {
-    registerForPushNotifications().then((token) => {
-      if (!token) return;
-      safeFetch(`${SERVER}/save-token`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ token }),
-      }).catch(() => {});
-    });
     loadAlerts();
     const interval = setInterval(loadAlerts, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadAlerts]);
 
-  /* ---------- Reset form ---------- */
-  const resetForm = () => { setAsset(null); setPrice(""); setCondition("over"); };
+  // Recharger les alertes quand on revient de la page Alert
+  useEffect(() => {
+    const unsubscribe = navigation.addListener("focus", () => {
+      loadAlerts();
+    });
+    return unsubscribe;
+  }, [navigation, loadAlerts]);
 
-  /* ---------- Créer alerte ---------- */
-  const handleSubmit = async () => {
-    if (!asset) { Alert.alert("Champ manquant", "Sélectionne un actif."); return; }
-    const numPrice = Number(price);
-    if (!price || isNaN(numPrice) || numPrice <= 0) {
-      Alert.alert("Prix invalide", "Entre un prix supérieur à 0.");
-      return;
+  /* ---- Suppression ---- */
+  const handleDeletePress = (id, asset, price) => {
+    setDeleteModal({ id, asset, price });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteModal) return;
+    const { id } = deleteModal;
+    setDeleteModal(null);
+    try {
+      const { ok } = await safeFetch(`${SERVER}/alerts/${id}`, { method: "DELETE" });
+      if (!ok) throw new Error();
+      setAlerts(prev => prev.filter(a => a.id !== id));
+    } catch {
+      Alert.alert("Erreur", "Suppression impossible.");
     }
+  };
+
+  /* ---- Soumission alerte ---- */
+  const handleSubmit = async () => {
+    setFormError(null);
+    const numPrice = parseFloat(price.replace(",", "."));
+    if (!asset)          return setFormError("Choisis un actif.");
+    if (isNaN(numPrice) || numPrice <= 0) return setFormError("Entre un prix valide.");
+
     setSubmitting(true);
     try {
       const { ok, status, data } = await safeFetch(`${SERVER}/alerts`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ asset: asset.symbol, condition, price: numPrice }),
+        body:    JSON.stringify({ asset: asset.symbol, condition, price: numPrice, user: userId }),
       });
-      if (status === 409) { Alert.alert("⚠️ Impossible", data.message, [{ text: "OK" }]); return; }
-      if (!ok) throw new Error(data.error || "Erreur serveur");
-      setSuccessData({ asset: asset.symbol, display: asset.display_name, condition, price: numPrice });
-      setSuccessModal(true);
-      resetForm();
-      loadAlerts();
-    } catch (e) {
-      Alert.alert("Erreur", e.message || "Impossible de contacter le serveur.");
+
+      if (status === 409) {
+        setFormError(data.message || "Cette alerte est déjà déclenchée.");
+        return;
+      }
+      if (!ok) {
+        setFormError(data.error || "Erreur serveur.");
+        return;
+      }
+
+      setAlerts(prev => [data, ...prev]);
+      setSuccessModal(data);
+      setPrice("");
+      setAsset(null);
+      setCondition("over");
+      setFormError(null);
+    } catch (err) {
+      setFormError(err.message);
     } finally {
       setSubmitting(false);
     }
   };
 
-  /* ---------- Demander confirmation suppression ---------- */
-  const requestDelete = (id) => {
-    const item = alerts.find((a) => a.id === id);
-    if (!item) return;
-    setDeleteTarget({ id: item.id, asset: item.asset, price: item.price });
-  };
-
-  /* ---------- Confirmer suppression ---------- */
-  const confirmDelete = async () => {
-    if (!deleteTarget) return;
-    const { id } = deleteTarget;
-    setDeleteTarget(null);                             // fermer le modal d'abord
-    setAlerts((prev) => prev.filter((a) => a.id !== id)); // update UI immédiat
-
-    try {
-      const res = await fetch(`${SERVER}/alerts/${id}`, { method: "DELETE" });
-      // On accepte tout status 2xx
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    } catch (e) {
-      console.warn("Suppression échouée:", e.message);
-      loadAlerts(); // resync depuis le serveur
-    }
-  };
-
-  const active = alerts.filter((a) => a.fired !== 1);
-  const fired  = alerts.filter((a) => a.fired === 1);
+  const active = alerts.filter(a => a.fired !== 1);
+  const fired  = alerts.filter(a => a.fired === 1);
 
   /* ============================================================
      RENDU
@@ -447,191 +503,257 @@ export default function HomeScreen() {
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.scrollContent}
-        keyboardShouldPersistTaps="always"
+        keyboardShouldPersistTaps="handled"
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={() => loadAlerts(true)} tintColor={C.accent} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => loadAlerts(true)}
+            tintColor={C.accent}
+          />
         }
       >
         {/* HEADER */}
         <View style={s.header}>
           <View>
-            <Text style={s.headerTitle}>DERIV ALERT</Text>
-            <Text style={s.headerSub}>Surveillance de prix temps réel</Text>
+            <Text style={s.headerTitle}>DEVISES</Text>
+            <Text style={s.headerSub}>ALERTS</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 5 }}>
+              <View style={{
+                width: 9, height: 9, borderRadius: 5, marginRight: 6,
+                backgroundColor:
+                  tokenStatus.startsWith("✅") ? C.green :
+                  tokenStatus.startsWith("⏳") ? C.amber :
+                  tokenStatus.startsWith("📲") ? C.amber :
+                  C.red,
+              }} />
+              {(tokenStatus.startsWith("❌") || tokenStatus.startsWith("⏳")) && (
+                <Text style={{ fontSize: 9, color: C.muted }}>
+                  ({tokenStatus.slice(tokenStatus.indexOf(" ") + 1)})
+                </Text>
+              )}
+            </View>
           </View>
-          <View style={s.headerBadge}>
-            <Text style={s.headerBadgeNum}>{active.length}</Text>
-            <Text style={s.headerBadgeLabel}>actives</Text>
-          </View>
+          <TouchableOpacity
+            style={s.headerBadge}
+            onPress={() => navigation.navigate("Alert")}
+            activeOpacity={0.7}
+          >
+            <Text style={s.headerBadgeNum}>{alerts.length}</Text>
+            <Text style={s.headerBadgeLabel}>ALERTES</Text>
+          </TouchableOpacity>
         </View>
 
         {/* FORMULAIRE */}
         <View style={s.section}>
-          <Text style={s.sectionTitle}>CRÉER UNE ALERTE</Text>
+          <View style={s.sectionHeader}>
+            <Text style={s.sectionTitle}>NOUVELLE ALERTE</Text>
+          </View>
           <View style={s.formCard}>
+            {/* Actif */}
             <Text style={s.fieldLabel}>ACTIF</Text>
             <TouchableOpacity
               style={[s.dropdown, asset && s.dropdownActive]}
-              activeOpacity={0.7}
               onPress={() => setPickerOpen(true)}
+              activeOpacity={0.7}
             >
               <View style={{ flex: 1 }}>
                 {asset ? (
                   <>
                     <Text style={s.dropdownSymbol}>{asset.symbol}</Text>
-                    <Text style={s.dropdownSubname} numberOfLines={1}>{asset.display_name}</Text>
+                    <Text style={s.dropdownSubname}>{asset.display_name}</Text>
                   </>
                 ) : (
-                  <Text style={s.dropdownPlaceholder}>Appuyer pour choisir un actif…</Text>
+                  <Text style={s.dropdownPlaceholder}>Sélectionner un actif...</Text>
                 )}
               </View>
-              <Text style={s.dropdownArrow}>▾</Text>
+              <Text style={s.dropdownArrow}>▼</Text>
             </TouchableOpacity>
 
+            {/* Prix */}
             <Text style={[s.fieldLabel, { marginTop: 16 }]}>NIVEAU DE PRIX</Text>
             <TextInput
               style={s.input}
-              placeholder="Ex : 1250.50"
+              placeholder="Ex : 1850.50"
               placeholderTextColor={C.muted}
-              keyboardType="numeric"
+              keyboardType="decimal-pad"
               value={price}
               onChangeText={setPrice}
               returnKeyType="done"
             />
 
+            {/* Condition */}
             <Text style={[s.fieldLabel, { marginTop: 16 }]}>CONDITION</Text>
             <View style={s.condRow}>
               <TouchableOpacity
-                style={[s.condBtn, condition === "over" && s.condBtnOver]}
-                activeOpacity={0.7}
+                style={[s.condBtn, condition === "over"  && s.condBtnOver]}
                 onPress={() => setCondition("over")}
+                activeOpacity={0.7}
               >
-                <Text style={[s.condBtnText, condition === "over" && { color: C.green }]}>▲  AU-DESSUS</Text>
+                <Text style={[s.condBtnText, condition === "over"  && { color: C.green }]}>
+                  ▲ AU-DESSUS
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.condBtn, condition === "under" && s.condBtnUnder]}
-                activeOpacity={0.7}
                 onPress={() => setCondition("under")}
+                activeOpacity={0.7}
               >
-                <Text style={[s.condBtnText, condition === "under" && { color: C.red }]}>▼  EN-DESSOUS</Text>
+                <Text style={[s.condBtnText, condition === "under" && { color: C.red }]}>
+                  ▼ EN-DESSOUS
+                </Text>
               </TouchableOpacity>
             </View>
 
+            {formError && (
+              <Text style={{ color: C.red, fontSize: 12, marginTop: 10 }}>{formError}</Text>
+            )}
+
             <TouchableOpacity
               style={[s.submitBtn, submitting && s.submitBtnDisabled]}
-              activeOpacity={0.8}
               onPress={handleSubmit}
               disabled={submitting}
+              activeOpacity={0.8}
             >
               {submitting
                 ? <ActivityIndicator color={C.bg} />
-                : <Text style={s.submitBtnText}>+ CRÉER L'ALERTE</Text>
+                : <Text style={s.submitBtnText}>＋ CRÉER L'ALERTE</Text>
               }
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* ALERTES ACTIVES */}
+        {/* LISTE ALERTES */}
         <View style={s.section}>
           <View style={s.sectionHeader}>
-            <Text style={s.sectionTitle}>ALERTES ACTIVES</Text>
-            <View style={s.pill}><Text style={s.pillText}>{active.length}</Text></View>
+            <Text style={s.sectionTitle}>MES ALERTES</Text>
+            <TouchableOpacity
+              style={[s.pill, { flexDirection: "row", alignItems: "center", gap: 6 }]}
+              onPress={() => navigation.navigate("Alert")}
+              activeOpacity={0.7}
+            >
+              {alerts.length > 0 && (
+                <View style={{
+                  backgroundColor: C.accent, borderRadius: 8,
+                  minWidth: 18, height: 18, alignItems: "center", justifyContent: "center",
+                  paddingHorizontal: 4,
+                }}>
+                  <Text style={{ color: C.bg, fontSize: 10, fontWeight: "800" }}>{alerts.length}</Text>
+                </View>
+              )}
+              <Text style={s.pillText}>Tout voir →</Text>
+            </TouchableOpacity>
           </View>
 
-          {loadingList && (
+          {loadingAlerts && (
             <View style={s.stateBox}>
               <ActivityIndicator color={C.accent} />
-              <Text style={s.stateText}>Chargement…</Text>
+              <Text style={s.stateText}>Chargement...</Text>
             </View>
           )}
-          {listError && !loadingList && (
+
+          {alertsError && !loadingAlerts && (
             <View style={s.stateBox}>
-              <Text style={s.stateError}>{listError}</Text>
-              <TouchableOpacity style={s.retryBtn} activeOpacity={0.7} onPress={loadAlerts}>
-                <Text style={s.retryText}>↺  Réessayer</Text>
+              <Text style={s.stateError}>{alertsError}</Text>
+              <TouchableOpacity style={s.retryBtn} onPress={() => loadAlerts()}>
+                <Text style={s.retryText}>Réessayer</Text>
               </TouchableOpacity>
             </View>
           )}
-          {!loadingList && !listError && active.length === 0 && (
+
+          {!loadingAlerts && !alertsError && alerts.length === 0 && (
             <View style={s.emptyBox}>
               <Text style={s.emptyIcon}>🔔</Text>
-              <Text style={s.emptyText}>Aucune alerte active</Text>
+              <Text style={s.emptyText}>Aucune alerte créée</Text>
             </View>
           )}
-          {active.map((item) => (
-            <AlertCard key={item.id} item={item} onDelete={requestDelete} />
-          ))}
-        </View>
 
-        {/* ALERTES DÉCLENCHÉES */}
-        {fired.length > 0 && (
-          <View style={[s.section, { marginBottom: 40 }]}>
-            <View style={s.sectionHeader}>
-              <Text style={s.sectionTitle}>DÉCLENCHÉES</Text>
-              <View style={[s.pill, { backgroundColor: "rgba(255,179,0,0.15)" }]}>
-                <Text style={[s.pillText, { color: C.amber }]}>{fired.length}</Text>
+          {!loadingAlerts && !alertsError && active.length > 0 && (
+            <>
+              <View style={[s.sectionHeader, { marginBottom: 8 }]}>
+                <Text style={[s.sectionTitle, { fontSize: 8 }]}>ACTIVES</Text>
+                <View style={s.pill}><Text style={s.pillText}>{active.length}</Text></View>
               </View>
-            </View>
-            {fired.map((item) => (
-              <AlertCard key={item.id} item={item} onDelete={requestDelete} />
-            ))}
-          </View>
-        )}
+              {active.slice(0, 5).map(item => (
+                <AlertCard
+                  key={item.id}
+                  item={item}
+                  onDelete={(id) => handleDeletePress(id, item.asset, item.price)}
+                />
+              ))}
+            </>
+          )}
+
+          {!loadingAlerts && !alertsError && fired.length > 0 && (
+            <>
+              <View style={[s.sectionHeader, { marginTop: 12, marginBottom: 8 }]}>
+                <Text style={[s.sectionTitle, { fontSize: 8, color: C.amber }]}>DÉCLENCHÉES</Text>
+                <View style={[s.pill, { backgroundColor: "rgba(255,179,0,0.12)" }]}>
+                  <Text style={[s.pillText, { color: C.amber }]}>{fired.length}</Text>
+                </View>
+              </View>
+              {fired.slice(0, 3).map(item => (
+                <AlertCard
+                  key={item.id}
+                  item={item}
+                  onDelete={(id) => handleDeletePress(id, item.asset, item.price)}
+                />
+              ))}
+            </>
+          )}
+        </View>
       </ScrollView>
 
-      {/* PICKER ACTIF */}
+      {/* MODAL SÉLECTION ACTIF */}
       <AssetPickerModal
         visible={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        onSelect={(sym) => setAsset(sym)}
+        onSelect={setAsset}
         selected={asset?.symbol}
       />
 
-      {/* MODAL CONFIRMATION SUPPRESSION */}
+      {/* MODAL SUPPRESSION */}
       <DeleteConfirmModal
-        visible={!!deleteTarget}
-        assetName={deleteTarget?.asset}
-        price={deleteTarget?.price}
+        visible={!!deleteModal}
+        assetName={deleteModal?.asset}
+        price={deleteModal?.price}
         onConfirm={confirmDelete}
-        onCancel={() => setDeleteTarget(null)}
+        onCancel={() => setDeleteModal(null)}
       />
 
       {/* MODAL SUCCÈS */}
-      <Modal visible={successModal} transparent animationType="fade" onRequestClose={() => setSuccessModal(false)}>
-        <View style={s.overlayCenter}>
-          <View style={s.successModal}>
-            <Text style={s.successIcon}>✅</Text>
-            <Text style={s.successTitle}>Alerte créée !</Text>
-            {successData && (
+      {successModal && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setSuccessModal(null)}>
+          <View style={s.overlayCenter}>
+            <View style={s.successModal}>
+              <Text style={s.successIcon}>✅</Text>
+              <Text style={s.successTitle}>ALERTE CRÉÉE</Text>
               <View style={s.successTable}>
                 <View style={s.successRow}>
-                  <Text style={s.successKey}>Actif</Text>
-                  <View style={{ alignItems: "flex-end" }}>
-                    <Text style={s.successVal}>{successData.asset}</Text>
-                    <Text style={[s.successKey, { marginTop: 2 }]}>{successData.display}</Text>
-                  </View>
+                  <Text style={s.successKey}>ACTIF</Text>
+                  <Text style={s.successVal}>{successModal.asset}</Text>
                 </View>
                 <View style={s.divider} />
                 <View style={s.successRow}>
-                  <Text style={s.successKey}>Niveau</Text>
-                  <Text style={s.successVal}>
-                    {Number(successData.price).toLocaleString("fr-FR", { minimumFractionDigits: 2 })}
+                  <Text style={s.successKey}>CONDITION</Text>
+                  <Text style={[s.successVal, { color: successModal.condition === "over" ? C.green : C.red }]}>
+                    {successModal.condition === "over" ? "▲ AU-DESSUS" : "▼ EN-DESSOUS"}
                   </Text>
                 </View>
                 <View style={s.divider} />
                 <View style={s.successRow}>
-                  <Text style={s.successKey}>Condition</Text>
-                  <Text style={[s.successVal, { color: successData.condition === "over" ? C.green : C.red }]}>
-                    {successData.condition === "over" ? "▲ Au-dessus" : "▼ En-dessous"}
+                  <Text style={s.successKey}>NIVEAU</Text>
+                  <Text style={s.successVal}>
+                    {Number(successModal.price).toLocaleString("fr-FR", { minimumFractionDigits: 2 })}
                   </Text>
                 </View>
               </View>
-            )}
-            <TouchableOpacity style={s.successBtn} activeOpacity={0.8} onPress={() => setSuccessModal(false)}>
-              <Text style={s.successBtnText}>OK</Text>
-            </TouchableOpacity>
+              <TouchableOpacity style={s.successBtn} onPress={() => setSuccessModal(null)}>
+                <Text style={s.successBtnText}>OK</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -701,7 +823,6 @@ const s = StyleSheet.create({
   submitBtnDisabled: { opacity: 0.5 },
   submitBtnText:     { color: C.bg, fontSize: 13, fontWeight: "800", letterSpacing: 2 },
 
-  /* Alertes */
   alertCard: {
     flexDirection: "row", backgroundColor: C.card, borderRadius: 13,
     marginBottom: 10, borderWidth: 1, borderColor: C.border,
@@ -722,7 +843,6 @@ const s = StyleSheet.create({
     width: 56, alignItems: "center", justifyContent: "center",
     borderLeftWidth: 1, borderLeftColor: C.border,
     borderTopRightRadius: 13, borderBottomRightRadius: 13,
-    // Fond légèrement rouge pour indiquer la zone de suppression
     backgroundColor: "rgba(255,61,113,0.05)",
   },
   deleteBtnText: { color: C.red, fontSize: 20, fontWeight: "700" },
@@ -741,7 +861,6 @@ const s = StyleSheet.create({
   emptyIcon:  { fontSize: 36, marginBottom: 8 },
   emptyText:  { color: C.muted, fontSize: 13 },
 
-  /* Picker */
   pickerWrap:  { flex: 1, justifyContent: "flex-end" },
   pickerBg:    { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.7)" },
   pickerSheet: {
@@ -778,10 +897,8 @@ const s = StyleSheet.create({
   assetRowRight:     { flexDirection: "row", alignItems: "center" },
   marketDot:         { width: 8, height: 8, borderRadius: 4 },
 
-  /* Overlay central */
   overlayCenter: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "rgba(0,0,0,0.75)" },
 
-  /* Modal confirmation suppression */
   confirmModal: {
     backgroundColor: C.card, borderRadius: 20, padding: 28,
     borderWidth: 1, borderColor: "rgba(255,61,113,0.3)", alignItems: "center",
@@ -801,7 +918,6 @@ const s = StyleSheet.create({
   },
   confirmDeleteText: { color: "#fff", fontWeight: "800", fontSize: 14 },
 
-  /* Modal succès */
   successModal: {
     backgroundColor: C.card, borderRadius: 20, padding: 28,
     borderWidth: 1, borderColor: C.border, alignItems: "center",

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "573781537315",
+    "project_id": "deriv-alert-f8289",
+    "storage_bucket": "deriv-alert-f8289.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:573781537315:android:220f709c3754d966e13796",
+        "android_client_info": {
+          "package_name": "com.sadath32.derivalert"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBILVSZbUJJk9xiCVSTlu-ET4kmN1od9lI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
