@@ -41,6 +41,38 @@ export default function AdminScreen({ navigation }) {
     if (adminCode) loadCodes();
   }, [adminCode]);
 
+  const revokeCode = async (codeToRevoke) => {
+    try {
+      const res = await fetch(`${SERVER}/invite/revoke`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ adminCode, codeToRevoke }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        await loadCodes();
+        Alert.alert("Révoqué", `Le code ${codeToRevoke} a été révoqué. L'utilisateur sera bloqué au prochain lancement.`);
+      } else {
+        setError(data.error);
+      }
+    } catch { setError("Erreur réseau"); }
+  };
+
+  const confirmRevoke = (code) => {
+    Alert.alert(
+      "Révoquer ce code ?",
+      `${code}
+
+L'utilisateur sera bloqué au prochain lancement de l'app.`,
+      [
+        { text: "Annuler", style: "cancel" },
+        { text: "Révoquer", style: "destructive", onPress: () => revokeCode(code) },
+      ]
+    );
+  };
+
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+
   const loadCodes = async () => {
     setLoading(true);
     try {
@@ -50,7 +82,10 @@ export default function AdminScreen({ navigation }) {
         body:    JSON.stringify({ adminCode }),
       });
       const data = await res.json();
-      if (res.ok) setCodes(data.codes || []);
+      if (res.ok) {
+        setCodes(data.codes || []);
+        setIsSuperAdmin(data.isSuperAdmin || false);
+      }
       else setError(data.error);
     } catch { setError("Erreur réseau"); }
     finally   { setLoading(false); }
@@ -99,8 +134,10 @@ export default function AdminScreen({ navigation }) {
           <Text style={s.backText}>Retour</Text>
         </TouchableOpacity>
         <Text style={s.headerTitle}>ADMIN</Text>
-        <View style={s.adminBadge}>
-          <Text style={s.adminBadgeText}>ADMIN</Text>
+        <View style={[s.adminBadge, isSuperAdmin && { backgroundColor: "rgba(124,58,237,0.2)", borderColor: "rgba(124,58,237,0.4)", borderWidth: 1 }]}>
+          <Text style={[s.adminBadgeText, isSuperAdmin && { color: "#7C3AED" }]}>
+            {isSuperAdmin ? "SUPERADMIN" : "ADMIN"}
+          </Text>
         </View>
       </View>
 
@@ -126,29 +163,25 @@ export default function AdminScreen({ navigation }) {
         <View style={s.section}>
           <Text style={s.sectionTitle}>GÉNÉRER UN CODE</Text>
           <View style={s.genRow}>
-            <TouchableOpacity
-              style={[s.genBtn, generating && s.genBtnDisabled]}
-              onPress={() => generateCode('user')}
-              disabled={generating}
-              activeOpacity={0.8}
-            >
-              {generating
-                ? <ActivityIndicator color={C.bg} size="small" />
-                : <Text style={s.genBtnText}>+ Code Utilisateur</Text>
-              }
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[s.genBtn, s.genBtnAdmin, generating && s.genBtnDisabled]}
-              onPress={() => generateCode('admin')}
-              disabled={generating}
-              activeOpacity={0.8}
-            >
-              {generating
-                ? <ActivityIndicator color={C.bg} size="small" />
-                : <Text style={s.genBtnText}>+ Code Admin</Text>
-              }
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity
+                style={[s.genBtn, generating && s.genBtnDisabled]}
+                onPress={() => generateCode('user')}
+                disabled={generating}
+                activeOpacity={0.8}
+              >
+                {generating ? <ActivityIndicator color={C.bg} size="small" /> : <Text style={s.genBtnText}>+ Code Utilisateur</Text>}
+              </TouchableOpacity>
+              {isSuperAdmin && (
+                <TouchableOpacity
+                  style={[s.genBtn, s.genBtnAdmin, generating && s.genBtnDisabled]}
+                  onPress={() => generateCode('admin')}
+                  disabled={generating}
+                  activeOpacity={0.8}
+                >
+                  {generating ? <ActivityIndicator color={C.bg} size="small" /> : <Text style={s.genBtnText}>+ Code Admin</Text>}
+                </TouchableOpacity>
+              )}
+            </View>
         </View>
 
         {error && <Text style={s.errorText}>{error}</Text>}
@@ -159,22 +192,38 @@ export default function AdminScreen({ navigation }) {
           {loading
             ? <ActivityIndicator color={C.accent} style={{ marginTop: 20 }} />
             : codes.map(c => (
-              <View key={c.id} style={[s.codeCard, c.used === 1 && c.role !== 'admin' && s.codeCardUsed]}>
+              <View key={c.id} style={[s.codeCard, (c.used === 1 && c.role !== 'admin') && s.codeCardUsed, c.revoked === 1 && s.codeCardRevoked]}>
                 <View style={s.codeLeft}>
-                  <Text style={s.codeText}>{c.code}</Text>
+                  <Text style={[s.codeText, c.revoked === 1 && { textDecorationLine: "line-through", color: C.muted }]}>{c.code}</Text>
                   <Text style={s.codeMeta}>
-                    {c.role === 'admin' ? '👑 Admin' : c.used === 1 ? `✓ Utilisé par ${c.used_by?.slice(0, 12)}...` : '⏳ En attente'}
+                    {c.revoked === 1 ? '🚫 Révoqué' :
+                     c.role === 'admin' ? '👑 Admin' :
+                     c.used === 1 ? `✓ Utilisé par ${c.used_by?.slice(0, 12)}...` : '⏳ En attente'}
                   </Text>
                 </View>
-                <View style={[s.codeBadge, {
-                  backgroundColor: c.role === 'admin' ? 'rgba(0,200,248,0.15)' :
-                    c.used === 1 ? 'rgba(255,179,0,0.12)' : 'rgba(0,230,118,0.12)'
-                }]}>
-                  <Text style={[s.codeBadgeText, {
-                    color: c.role === 'admin' ? C.accent : c.used === 1 ? C.amber : C.green
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <View style={[s.codeBadge, {
+                    backgroundColor: c.revoked === 1 ? 'rgba(255,61,113,0.12)' :
+                      c.role === 'admin' ? 'rgba(0,200,248,0.15)' :
+                      c.used === 1 ? 'rgba(255,179,0,0.12)' : 'rgba(0,230,118,0.12)'
                   }]}>
-                    {c.role === 'admin' ? 'ADMIN' : c.used === 1 ? 'UTILISÉ' : 'ACTIF'}
-                  </Text>
+                    <Text style={[s.codeBadgeText, {
+                      color: c.revoked === 1 ? C.red :
+                        c.role === 'admin' ? C.accent :
+                        c.used === 1 ? C.amber : C.green
+                    }]}>
+                      {c.revoked === 1 ? 'RÉVOQUÉ' : c.role === 'admin' ? 'ADMIN' : c.used === 1 ? 'UTILISÉ' : 'ACTIF'}
+                    </Text>
+                  </View>
+                  {c.role !== 'admin' && c.revoked !== 1 && (
+                    <TouchableOpacity
+                      style={s.revokeBtn}
+                      onPress={() => confirmRevoke(c.code)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={s.revokeBtnText}>🚫</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             ))
@@ -233,4 +282,12 @@ const s = StyleSheet.create({
   codeMeta:     { fontSize: 11, color: C.sub, marginTop: 3 },
   codeBadge:    { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   codeBadgeText:{ fontSize: 9, fontWeight: "700", letterSpacing: 1 },
+  codeCardRevoked: { opacity: 0.5, borderColor: "rgba(255,61,113,0.2)" },
+  revokeBtn: {
+    width: 32, height: 32, borderRadius: 8,
+    backgroundColor: "rgba(255,61,113,0.1)",
+    borderWidth: 1, borderColor: "rgba(255,61,113,0.3)",
+    alignItems: "center", justifyContent: "center",
+  },
+  revokeBtnText: { fontSize: 14 },
 });

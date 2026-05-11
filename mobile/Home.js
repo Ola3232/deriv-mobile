@@ -424,7 +424,7 @@ export default function HomeScreen({ navigation, route }) {
             </View>
           </View>
           <View style={{ flexDirection: "row", gap: 8 }}>
-            {userRole === "admin" && (
+            {(userRole === "admin" || userRole === "superadmin") && (
               <TouchableOpacity
                 style={[s.headerBadge, { backgroundColor: "rgba(124,58,237,0.15)", borderColor: "rgba(124,58,237,0.3)", borderWidth: 1 }]}
                 onPress={() => navigation.navigate("Admin")} activeOpacity={0.7}

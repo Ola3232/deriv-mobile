@@ -21,7 +21,36 @@ export default function App() {
       try {
         const code = await SecureStore.getItemAsync("inviteCode");
         const role = await SecureStore.getItemAsync("userRole");
-        if (code) {
+
+        if (!code) { setChecking(false); return; }
+
+        // Vérification serveur — le code est-il toujours valide ?
+        try {
+          const uid = await SecureStore.getItemAsync("userId");
+          const res = await fetch("https://deriv-backend-1.onrender.com/invite/check", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ code, userId: uid }),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data.valid) {
+              setHasAccess(true);
+              setUserRole(data.role || role || "user");
+            } else {
+              // Code révoqué par l'admin → effacer et redemander
+              await SecureStore.deleteItemAsync("inviteCode");
+              await SecureStore.deleteItemAsync("userRole");
+              setHasAccess(false);
+            }
+          } else {
+            // Serveur indisponible → accès offline temporaire
+            setHasAccess(true);
+            setUserRole(role || "user");
+          }
+        } catch {
+          // Pas de réseau → accès offline temporaire
           setHasAccess(true);
           setUserRole(role || "user");
         }
@@ -62,7 +91,7 @@ export default function App() {
           initialParams={{ userRole }}
         />
         <Stack.Screen name="Alert"  component={ListAlert} />
-        {userRole === "admin" && (
+        {(userRole === "admin" || userRole === "superadmin") && (
           <Stack.Screen name="Admin" component={AdminScreen} />
         )}
       </Stack.Navigator>
