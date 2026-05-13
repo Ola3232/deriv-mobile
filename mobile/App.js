@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import * as SecureStore from "expo-secure-store";
-import { View, ActivityIndicator } from "react-native";
+import * as Notifications from "expo-notifications";
+import { View, ActivityIndicator, AppState } from "react-native";
+
+const SERVER = "https://deriv-backend-1.onrender.com";
 
 import HomeScreen   from "./Home.js";
 import ListAlert    from "./Alert.js";
@@ -63,6 +66,42 @@ export default function App() {
     setUserRole(role);
     setHasAccess(true);
   };
+
+  // Vérifier les alertes manquées quand l'app revient au premier plan
+  const appState = useRef(AppState.currentState);
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", async (nextState) => {
+      if (appState.current.match(/inactive|background/) && nextState === "active") {
+        try {
+          const uid = await SecureStore.getItemAsync("userId");
+          if (!uid) return;
+          const res  = await fetch(`${SERVER}/alerts?user=${uid}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          const missed = (Array.isArray(data) ? data : []).filter(
+            a => a.fired === 1 && a.fire_count > 0 && a.last_sent_at
+          );
+          // Vérifier si des alertes ont été déclenchées dans les dernières 24h
+          const recent = missed.filter(a => {
+            const firedTime = new Date(a.last_sent_at).getTime();
+            return Date.now() - firedTime < 24 * 60 * 60 * 1000;
+          });
+          if (recent.length > 0) {
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title: "📊 Alertes déclenchées pendant votre absence",
+                body:  `${recent.length} alerte(s) se sont déclenchées. Ouvrez l'app pour voir les détails.`,
+                sound: "default",
+              },
+              trigger: null,
+            });
+          }
+        } catch {}
+      }
+      appState.current = nextState;
+    });
+    return () => sub.remove();
+  }, []);
 
   if (checking) {
     return (
