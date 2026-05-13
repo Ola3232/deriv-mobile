@@ -47,16 +47,18 @@ export default function AdminScreen({ navigation }) {
       const res  = await fetch(`${SERVER}/invite/list`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ adminCode: codeToUse }),
+        body:    JSON.stringify({ adminCode: codeToUse.toUpperCase().trim() }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch {}
       if (res.ok) {
         setCodes(data.codes || []);
         setIsSuperAdmin(data.isSuperAdmin === true);
       } else {
-        setError(data.error || "Erreur chargement");
+        setError(`Erreur ${res.status}: ${data.error || text.slice(0, 100)}`);
       }
-    } catch { setError("Erreur réseau"); }
+    } catch (err) { setError("Erreur réseau: " + err.message); }
     finally { setLoading(false); }
   }, [adminCode]);
 
@@ -71,7 +73,7 @@ export default function AdminScreen({ navigation }) {
       const res  = await fetch(`${SERVER}/invite/generate`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ adminCode, role }),
+        body:    JSON.stringify({ adminCode: adminCode.toUpperCase().trim(), role }),
       });
       const data = await res.json();
       if (res.ok) {
