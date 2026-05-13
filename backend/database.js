@@ -63,8 +63,8 @@ export async function initDB() {
 
   await pool.query(`
     INSERT INTO invite_codes (code, role)
-    VALUES ('ADMIN-SADATH2024', 'super_admin')
-    ON CONFLICT (code) DO UPDATE SET role = 'super_admin'
+    VALUES ('ADMIN-SADATH2024', 'superadmin')
+    ON CONFLICT (code) DO UPDATE SET role = 'superadmin'
   `);
 
   console.log("✅ Base de données PostgreSQL initialisée");
