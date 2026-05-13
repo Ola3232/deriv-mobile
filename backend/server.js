@@ -219,7 +219,7 @@ app.post("/invite/validate", async (req, res) => {
   try {
     const result = await validateCode(code);
     if (!result.valid) return res.status(403).json({ error: result.reason });
-    if (result.role !== 'admin') await markCodeUsed(code, userId || "unknown");
+    if (result.role === 'user') await markCodeUsed(code, userId || "unknown");
     res.json({ valid: true, role: result.role });
   } catch (err) { res.status(500).json({ error: "Erreur serveur" }); }
 });
@@ -270,12 +270,6 @@ app.post("/invite/list", async (req, res) => {
     console.error("❌ Erreur list:", err.message);
     res.status(500).json({ error: "Erreur serveur" });
   }
-});
-  try {
-    const check = await validateCode(adminCode);
-    if (!check.valid || check.role !== 'admin') return res.status(403).json({ error: "Code admin invalide" });
-    res.json({ codes: await getCodes() });
-  } catch (err) { res.status(500).json({ error: "Erreur serveur" }); }
 });
 
 // Vérification au démarrage de l'app
