@@ -259,6 +259,20 @@ app.post("/invite/list", async (req, res) => {
   if (!adminCode) return res.status(400).json({ error: "Code admin requis" });
   try {
     const check = await validateCode(adminCode);
+    if (!check.valid || !['admin', 'superadmin'].includes(check.role))
+      return res.status(403).json({ error: "Code admin invalide" });
+    const allCodes = await getCodes();
+    const codes = check.role === 'superadmin'
+      ? allCodes
+      : allCodes.filter(c => c.created_by === adminCode.toUpperCase().trim());
+    res.json({ codes, isSuperAdmin: check.role === 'superadmin' });
+  } catch (err) {
+    console.error("❌ Erreur list:", err.message);
+    res.status(500).json({ error: "Erreur serveur" });
+  }
+});
+  try {
+    const check = await validateCode(adminCode);
     if (!check.valid || check.role !== 'admin') return res.status(403).json({ error: "Code admin invalide" });
     res.json({ codes: await getCodes() });
   } catch (err) { res.status(500).json({ error: "Erreur serveur" }); }
