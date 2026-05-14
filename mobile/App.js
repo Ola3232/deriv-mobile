@@ -25,9 +25,16 @@ export default function App() {
         const code = await SecureStore.getItemAsync("inviteCode");
         const role = await SecureStore.getItemAsync("userRole");
 
+        // Pas de code sauvegardé → demander le code
         if (!code) { setChecking(false); return; }
 
-        // Vérification serveur — le code est-il toujours valide ?
+        // Code sauvegardé → accès immédiat sans vérification serveur
+        // La vérification serveur se fait en arrière-plan
+        setHasAccess(true);
+        setUserRole(role || "user");
+        setChecking(false);
+
+        // Vérification serveur en arrière-plan (révocation seulement)
         try {
           const uid = await SecureStore.getItemAsync("userId");
           const res = await fetch("https://deriv-backend-1.onrender.com/invite/check", {
@@ -35,30 +42,23 @@ export default function App() {
             headers: { "Content-Type": "application/json" },
             body:    JSON.stringify({ code, userId: uid }),
           });
-
           if (res.ok) {
             const data = await res.json();
-            if (data.valid) {
-              setHasAccess(true);
-              setUserRole(data.role || role || "user");
-            } else {
-              // Code révoqué par l'admin → effacer et redemander
+            if (!data.valid) {
+              // Code révoqué → effacer et bloquer
               await SecureStore.deleteItemAsync("inviteCode");
               await SecureStore.deleteItemAsync("userRole");
               setHasAccess(false);
+            } else {
+              setUserRole(data.role || role || "user");
             }
-          } else {
-            // Serveur indisponible → accès offline temporaire
-            setHasAccess(true);
-            setUserRole(role || "user");
           }
-        } catch {
-          // Pas de réseau → accès offline temporaire
-          setHasAccess(true);
-          setUserRole(role || "user");
-        }
-      } catch {}
-      setChecking(false);
+          // Si erreur réseau → on garde l'accès, pas grave
+        } catch {}
+
+      } catch {
+        setChecking(false);
+      }
     })();
   }, []);
 
