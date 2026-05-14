@@ -3,70 +3,54 @@ import cors from "cors";
 import axios from "axios";
 import WebSocket from "ws";
 import {
-  initDB,
-  addAlert,
-  getAlerts,
-  deleteAlert,
-  markAlertFired,
-  resetAlertForCooldown,
-  deleteOldFiredAlerts,
-  saveToken,
-  getTokens,
-  validateCode,
-  markCodeUsed,
-  generateCode,
-  getCodes,
-  revokeCode,
+  initDB, addAlert, getAlerts, deleteAlert,
+  markAlertFired, resetAlertForCooldown, deleteOldFiredAlerts,
+  saveToken, getTokens,
+  validateCode, markCodeUsed, generateCode, getCodes, revokeCode,
 } from "./database.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use((req, res, next) => {
-  res.setHeader("Content-Type", "application/json");
-  next();
-});
+app.use((req, res, next) => { res.setHeader("Content-Type", "application/json"); next(); });
 
+/* ---- ÉTAT ---- */
 const subscribedSymbols = new Set();
-const lastPrices        = {};
-let   activeSymbols     = [];
-let   ws                = null;
-let   symbolsLoaded     = false;
-const cooldownMap       = new Map();
-const COOLDOWN_MS       = 2 * 60 * 60 * 1000;
+const lastPrices = {};
+let activeSymbols = [], ws = null, symbolsLoaded = false;
+const cooldownMap = new Map();
+const COOLDOWN_MS = 2 * 60 * 60 * 1000;
 
+/* ---- PUSH ---- */
 async function sendPush(title, body, data = {}, targetUser = null, channelId = "deriv-alerts-trading") {
-  const allTokens = await getTokens();
-  const tokens = targetUser
-    ? allTokens.filter(t => t.user === targetUser)
-    : allTokens;
-  if (!tokens.length) {
-    console.warn(`⚠️  Aucun token pour user=${targetUser || "tous"}`);
-    return;
-  }
+  const all = await getTokens();
+  const tokens = targetUser ? all.filter(t => t.user === targetUser) : all;
+  if (!tokens.length) { console.warn(`⚠️ Aucun token user=${targetUser}`); return; }
   for (const t of tokens) {
     try {
-      const message = { to: t.token, sound: "default", title, body, data, priority: "high", channelId, badge: 1 };
-      const res = await axios.post("https://exp.host/--/api/v2/push/send", message,
-        { headers: { "Content-Type": "application/json", "Accept": "application/json" } });
+      const res = await axios.post("https://exp.host/--/api/v2/push/send",
+        { to: t.token, sound: "default", title, body, data, priority: "high", channelId, badge: 1 },
+        { headers: { "Content-Type": "application/json", "Accept": "application/json" } }
+      );
       const ticket = res.data?.data ?? res.data;
-      if (ticket.status === "error") console.error(`❌ Push error:`, ticket.message, ticket.details);
+      if (ticket.status === "error") console.error(`❌ Push error:`, ticket.message);
       else console.log(`✅ Push envoyé à user=${targetUser} status=${ticket.status}`);
     } catch (err) {
-      console.error(`❌ Push HTTP error:`, err.message);
+      console.error(`❌ Push error:`, err.message);
       if (err.response) console.error(`   Response:`, JSON.stringify(err.response.data));
     }
   }
 }
 
+/* ---- SYMBOLS ---- */
 function loadActiveSymbols() {
-  const wsSymbols = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
-  const timeout = setTimeout(() => { try { wsSymbols.terminate(); } catch {} setTimeout(loadActiveSymbols, 30000); }, 15000);
-  wsSymbols.on("open", () => wsSymbols.send(JSON.stringify({ active_symbols: "brief", product_type: "basic" })));
-  wsSymbols.on("message", (raw) => {
+  const wsS = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
+  const t = setTimeout(() => { try { wsS.terminate(); } catch {} setTimeout(loadActiveSymbols, 30000); }, 15000);
+  wsS.on("open", () => wsS.send(JSON.stringify({ active_symbols: "brief", product_type: "basic" })));
+  wsS.on("message", (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (!msg.active_symbols) return;
-    clearTimeout(timeout);
+    clearTimeout(t);
     activeSymbols = msg.active_symbols.filter(s => s.symbol && s.display_name).map(s => ({
       symbol: s.symbol, display_name: s.display_name,
       market: s.market || "", market_name: s.market_display_name || s.market || "Other",
@@ -75,19 +59,17 @@ function loadActiveSymbols() {
     }));
     symbolsLoaded = true;
     console.log(`✅ ${activeSymbols.length} actifs chargés`);
-    try { wsSymbols.close(); } catch {}
+    try { wsS.close(); } catch {}
     setTimeout(loadActiveSymbols, 5 * 60 * 1000);
   });
-  wsSymbols.on("error", (err) => { clearTimeout(timeout); console.error("❌ WS symbols:", err.message); setTimeout(loadActiveSymbols, 15000); });
-  wsSymbols.on("close", () => clearTimeout(timeout));
+  wsS.on("error", (err) => { clearTimeout(t); console.error("❌ WS symbols:", err.message); setTimeout(loadActiveSymbols, 15000); });
+  wsS.on("close", () => clearTimeout(t));
 }
 
+/* ---- DERIV WS ---- */
 function connectDeriv() {
   ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
-  ws.on("open", () => {
-    console.log("✅ Connecté Deriv ticks");
-    for (const symbol of subscribedSymbols) ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
-  });
+  ws.on("open", () => { console.log("✅ Connecté Deriv"); for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 })); });
   ws.on("message", async (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (!msg.tick) return;
@@ -96,45 +78,26 @@ function connectDeriv() {
     let alerts; try { alerts = await getAlerts("%"); } catch { return; }
     for (const alert of alerts) {
       if (alert.asset !== symbol) continue;
-      const triggered =
-        (alert.condition === "over"  && price >= alert.price) ||
-        (alert.condition === "under" && price <= alert.price);
+      const triggered = (alert.condition === "over" && price >= alert.price) || (alert.condition === "under" && price <= alert.price);
       if (!triggered) {
         if (alert.fired === 1) {
-          const lastSent = cooldownMap.get(alert.id) || 0;
-          if (Date.now() - lastSent >= COOLDOWN_MS) {
-            cooldownMap.delete(alert.id);
-            await resetAlertForCooldown(alert.id).catch(() => {});
-          }
+          const ls = cooldownMap.get(alert.id) || 0;
+          if (Date.now() - ls >= COOLDOWN_MS) { cooldownMap.delete(alert.id); await resetAlertForCooldown(alert.id).catch(() => {}); }
         }
         continue;
       }
-      const lastSent = cooldownMap.get(alert.id) || 0;
-      if (Date.now() - lastSent < COOLDOWN_MS) continue;
+      const ls = cooldownMap.get(alert.id) || 0;
+      if (Date.now() - ls < COOLDOWN_MS) continue;
       cooldownMap.set(alert.id, Date.now());
       try { await markAlertFired(alert.id); } catch { continue; }
-      const dir  = alert.condition === "over" ? "au-dessus ↑" : "en-dessous ↓";
+      const dir = alert.condition === "over" ? "au-dessus ↑" : "en-dessous ↓";
       const type = alert.alert_type || "alert";
-      const titleMap  = { alert: "🔔 Alerte déclenchée !", tp: "✅ Take Profit atteint !", sl: "🛑 Stop Loss atteint !" };
+      const titleMap = { alert: "🔔 Alerte déclenchée !", tp: "✅ Take Profit atteint !", sl: "🛑 Stop Loss atteint !" };
       const prefixMap = { alert: "Niveau atteint", tp: "TP touché", sl: "SL touché" };
-      const notifTitle = titleMap[type]  || titleMap.alert;
-      const prefix     = prefixMap[type] || prefixMap.alert;
-      const body = `${prefix} — ${symbol} ${dir} de ${alert.price}\nPrix actuel : ${price.toFixed(4)}`;
+      const body = `${prefixMap[type] || "Niveau atteint"} — ${symbol} ${dir} de ${alert.price}\nPrix actuel : ${price.toFixed(4)}`;
       console.log(`🔔 [ALERT #${alert.id} user=${alert.user}] ${body}`);
-      const soundChannel = {
-        trading: "deriv-alerts-trading",
-        alarm:   "deriv-alerts-alarm",
-        pulse:   "deriv-alerts-pulse",
-      }[alert.sound || "trading"] || "deriv-alerts-trading";
-
-      await sendPush(notifTitle, body, {
-        alertId:   alert.id,
-        symbol,
-        price,
-        threshold: alert.price,
-        condition: alert.condition,
-        sound:     alert.sound || "trading",
-      }, alert.user, soundChannel);
+      const chMap = { trading: "deriv-alerts-trading", alarm: "deriv-alerts-alarm", pulse: "deriv-alerts-pulse" };
+      await sendPush(titleMap[type] || titleMap.alert, body, { alertId: alert.id, symbol, price, threshold: alert.price, condition: alert.condition }, alert.user, chMap[alert.sound || "trading"] || "deriv-alerts-trading");
     }
   });
   ws.on("close", (code) => { ws = null; setTimeout(connectDeriv, 5000); });
@@ -147,6 +110,9 @@ function subscribeSymbol(symbol) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
 }
 
+/* ============================================================
+   ROUTES
+============================================================ */
 app.get("/", (req, res) => res.json({ status: "ok", uptime: Math.floor(process.uptime()), symbols_loaded: symbolsLoaded, symbols_count: activeSymbols.length, subscriptions: [...subscribedSymbols] }));
 
 app.get("/symbols", (req, res) => {
@@ -154,7 +120,7 @@ app.get("/symbols", (req, res) => {
   const q = (req.query.q || "").toLowerCase().trim();
   const symbols = q ? activeSymbols.filter(s => s.symbol.toLowerCase().includes(q) || s.display_name.toLowerCase().includes(q) || s.market_name.toLowerCase().includes(q)) : activeSymbols;
   const grouped = {};
-  for (const s of symbols) { const key = s.market_name || "Autres"; if (!grouped[key]) grouped[key] = []; grouped[key].push(s); }
+  for (const s of symbols) { const k = s.market_name || "Autres"; if (!grouped[k]) grouped[k] = []; grouped[k].push(s); }
   res.json({ total: symbols.length, markets: grouped });
 });
 
@@ -164,22 +130,18 @@ app.get("/alerts", async (req, res) => {
 });
 
 app.post("/alerts", async (req, res) => {
-  const { asset, condition, price, user } = req.body;
+  const { asset, condition, price, user, sound, alertType } = req.body;
   if (!asset || typeof asset !== "string") return res.status(400).json({ error: "Actif invalide" });
   if (!["over", "under"].includes(condition)) return res.status(400).json({ error: "Condition invalide" });
   if (price == null || isNaN(Number(price)) || Number(price) <= 0) return res.status(400).json({ error: "Prix invalide" });
   const numPrice = Number(price);
   subscribeSymbol(asset);
-  const currentPrice = lastPrices[asset];
-  if (currentPrice != null) {
-    const already = (condition === "over" && currentPrice >= numPrice) || (condition === "under" && currentPrice <= numPrice);
-    if (already) return res.status(409).json({ error: "already_triggered", message: `Prix actuel de ${asset} (${currentPrice}) déjà ${condition === "over" ? "au-dessus" : "en-dessous"} de ${numPrice}.`, currentPrice });
+  const cur = lastPrices[asset];
+  if (cur != null) {
+    const already = (condition === "over" && cur >= numPrice) || (condition === "under" && cur <= numPrice);
+    if (already) return res.status(409).json({ error: "already_triggered", message: `Prix actuel de ${asset} (${cur}) déjà ${condition === "over" ? "au-dessus" : "en-dessous"} de ${numPrice}.`, currentPrice: cur });
   }
-  try {
-    const sound     = req.body.sound     || "trading";
-    const alertType = req.body.alertType || "alert";
-    res.status(201).json(await addAlert({ user: user || "default", asset, condition, price: numPrice, sound, alertType }));
-  }
+  try { res.status(201).json(await addAlert({ user: user || "default", asset, condition, price: numPrice, sound: sound || "trading", alertType: alertType || "alert" })); }
   catch { res.status(500).json({ error: "Erreur base de données" }); }
 });
 
@@ -193,7 +155,7 @@ app.delete("/alerts/:id", async (req, res) => {
 app.post("/save-token", async (req, res) => {
   const { token, user } = req.body;
   if (!token || typeof token !== "string") return res.status(400).json({ error: "Token invalide" });
-  try { await saveToken(user || "default", token); console.log(`📲 Token sauvegardé pour user=${user || "default"}`); res.json({ saved: true }); }
+  try { await saveToken(user || "default", token); console.log(`📲 Token sauvegardé user=${user || "default"}`); res.json({ saved: true }); }
   catch { res.status(500).json({ error: "Erreur base de données" }); }
 });
 
@@ -204,7 +166,7 @@ app.get("/price/:symbol", (req, res) => {
 });
 
 app.get("/tokens", async (req, res) => {
-  try { const tokens = await getTokens(); res.json({ count: tokens.length, tokens: tokens.map(t => ({ id: t.id, user: t.user, token: t.token.slice(0, 20) + "..." })) }); }
+  try { const t = await getTokens(); res.json({ count: t.length, tokens: t.map(x => ({ id: x.id, user: x.user, token: x.token.slice(0, 20) + "..." })) }); }
   catch { res.status(500).json({ error: "Erreur base de données" }); }
 });
 
@@ -213,66 +175,26 @@ app.get("/test-push", async (req, res) => {
   res.json({ sent: true });
 });
 
+/* ============================================================
+   ROUTES INVITATION
+============================================================ */
+
+// Valider un code
 app.post("/invite/validate", async (req, res) => {
   const { code, userId } = req.body;
   if (!code) return res.status(400).json({ error: "Code requis" });
   try {
     const result = await validateCode(code);
     if (!result.valid) return res.status(403).json({ error: result.reason });
-    if (result.role === 'user') await markCodeUsed(code, userId || "unknown");
+    if (result.role === "user") await markCodeUsed(code, userId || "unknown");
     res.json({ valid: true, role: result.role });
-  } catch (err) { res.status(500).json({ error: "Erreur serveur" }); }
-});
-
-app.post("/invite/generate", async (req, res) => {
-  const { adminCode, role } = req.body;
-  if (!adminCode) return res.status(400).json({ error: "Code admin requis" });
-  try {
-    const check = await validateCode(adminCode);
-
-    // Seul le superadmin peut créer des codes admin
-    if (!check.valid) return res.status(403).json({ error: "Code invalide" });
-
-    const requestedRole = role || 'user';
-
-    if (requestedRole === 'admin' && check.role !== 'superadmin') {
-      return res.status(403).json({
-        error: "Seul le superadmin peut créer des codes admin."
-      });
-    }
-
-    if (!['admin', 'superadmin'].includes(check.role)) {
-      return res.status(403).json({ error: "Permission insuffisante" });
-    }
-
-    const newCode = await generateCode(requestedRole, adminCode);
-    console.log(`🔑 Code ${requestedRole} généré par ${check.role}: ${newCode}`);
-    res.json({ code: newCode, role: requestedRole });
   } catch (err) {
-    console.error("❌ Erreur generate:", err.message);
+    console.error("❌ validate:", err.message);
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
 
-app.post("/invite/list", async (req, res) => {
-  const { adminCode } = req.body;
-  if (!adminCode) return res.status(400).json({ error: "Code admin requis" });
-  try {
-    const check = await validateCode(adminCode);
-    if (!check.valid || !['admin', 'superadmin'].includes(check.role))
-      return res.status(403).json({ error: "Code admin invalide" });
-    const allCodes = await getCodes();
-    const codes = check.role === 'superadmin'
-      ? allCodes
-      : allCodes.filter(c => c.created_by === adminCode.toUpperCase().trim());
-    res.json({ codes, isSuperAdmin: check.role === 'superadmin' });
-  } catch (err) {
-    console.error("❌ Erreur list:", err.message);
-    res.status(500).json({ error: "Erreur serveur" });
-  }
-});
-
-// Vérification au démarrage de l'app
+// Vérification au démarrage
 app.post("/invite/check", async (req, res) => {
   const { code } = req.body;
   if (!code) return res.status(400).json({ valid: false, reason: "Code requis" });
@@ -280,56 +202,87 @@ app.post("/invite/check", async (req, res) => {
     const result = await validateCode(code);
     res.json({ valid: result.valid, role: result.role, reason: result.reason });
   } catch (err) {
+    console.error("❌ check:", err.message);
     res.status(500).json({ valid: false, reason: "Erreur serveur" });
   }
 });
 
-// Révoquer un code (admin seulement)
-app.post("/invite/revoke", async (req, res) => {
-  const { adminCode, codeToRevoke } = req.body;
-  if (!adminCode || !codeToRevoke)
-    return res.status(400).json({ error: "Paramètres manquants" });
+// Générer un code
+app.post("/invite/generate", async (req, res) => {
+  const { adminCode, role } = req.body;
+  if (!adminCode) return res.status(400).json({ error: "Code admin requis" });
   try {
     const check = await validateCode(adminCode);
-    if (!check.valid || !['admin', 'superadmin'].includes(check.role))
-      return res.status(403).json({ error: "Permission insuffisante" });
-    // Un admin ne peut révoquer que ses propres codes
-    // Le superadmin peut tout révoquer
-    if (check.role === 'admin') {
-      const codes = await getCodes();
-      const target = codes.find(c => c.code === codeToRevoke.toUpperCase().trim());
-      if (!target || target.created_by !== adminCode)
-        return res.status(403).json({ error: "Vous ne pouvez révoquer que vos propres codes." });
-    }
+    if (!check.valid) return res.status(403).json({ error: "Code invalide" });
+    if (!["admin", "superadmin"].includes(check.role)) return res.status(403).json({ error: "Permission insuffisante" });
+    const requested = role || "user";
+    if (requested === "admin" && check.role !== "superadmin") return res.status(403).json({ error: "Seul le superadmin peut créer des codes admin." });
+    const newCode = await generateCode(requested, adminCode.toUpperCase().trim());
+    console.log(`🔑 Code ${requested} généré: ${newCode}`);
+    res.json({ code: newCode, role: requested });
+  } catch (err) {
+    console.error("❌ generate:", err.message);
+    res.status(500).json({ error: "Erreur serveur" });
+  }
+});
+
+// Lister les codes
+app.post("/invite/list", async (req, res) => {
+  const { adminCode } = req.body;
+  console.log(`📋 invite/list appelé avec code: ${adminCode}`);
+  if (!adminCode) return res.status(400).json({ error: "Code admin requis" });
+  try {
+    const check = await validateCode(adminCode);
+    console.log(`📋 validateCode result:`, JSON.stringify(check));
+    if (!check.valid) return res.status(403).json({ error: `Code invalide: ${check.reason}` });
+    if (!["admin", "superadmin"].includes(check.role)) return res.status(403).json({ error: `Permission insuffisante. Rôle: ${check.role}` });
+    const allCodes = await getCodes();
+    const codes = check.role === "superadmin" ? allCodes : allCodes.filter(c => c.created_by === adminCode.toUpperCase().trim());
+    res.json({ codes, isSuperAdmin: check.role === "superadmin" });
+  } catch (err) {
+    console.error("❌ list:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Révoquer un code
+app.post("/invite/revoke", async (req, res) => {
+  const { adminCode, codeToRevoke } = req.body;
+  if (!adminCode || !codeToRevoke) return res.status(400).json({ error: "Paramètres manquants" });
+  try {
+    const check = await validateCode(adminCode);
+    if (!check.valid || !["admin", "superadmin"].includes(check.role)) return res.status(403).json({ error: "Permission insuffisante" });
     await revokeCode(codeToRevoke);
-    console.log(`🚫 Code révoqué par ${check.role}: ${codeToRevoke}`);
+    console.log(`🚫 Code révoqué: ${codeToRevoke}`);
     res.json({ revoked: true, code: codeToRevoke });
   } catch (err) {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
 
-app.use((req, res) => res.status(404).json({ error: `Route inconnue : ${req.method} ${req.path}` }));
-app.use((err, req, res, next) => { console.error("❌ Express error:", err); res.status(500).json({ error: "Erreur interne" }); });
+app.use((req, res) => res.status(404).json({ error: `Route inconnue: ${req.method} ${req.path}` }));
+app.use((err, req, res, next) => { console.error("❌ Express:", err); res.status(500).json({ error: "Erreur interne" }); });
 
+/* ---- TÂCHES PÉRIODIQUES ---- */
 async function runPeriodicTasks() {
   try {
     const alerts = await getAlerts("%");
-    for (const alert of alerts) {
-      if (alert.fired !== 1) continue;
-      const lastSent = cooldownMap.get(alert.id);
-      if (!lastSent && alert.last_sent_at) {
-        const elapsed = Date.now() - new Date(alert.last_sent_at).getTime();
-        if (elapsed >= COOLDOWN_MS) { await resetAlertForCooldown(alert.id).catch(() => {}); console.log(`🔄 Alerte #${alert.id} réarmée`); }
+    for (const a of alerts) {
+      if (a.fired !== 1) continue;
+      const ls = cooldownMap.get(a.id);
+      if (!ls && a.last_sent_at) {
+        const elapsed = Date.now() - new Date(a.last_sent_at).getTime();
+        if (elapsed >= COOLDOWN_MS) { await resetAlertForCooldown(a.id).catch(() => {}); console.log(`🔄 Alerte #${a.id} réarmée`); }
       }
     }
-  } catch (err) { console.error("❌ Erreur cooldown:", err.message); }
+  } catch (err) { console.error("❌ Cooldown:", err.message); }
   try {
     const deleted = await deleteOldFiredAlerts();
-    if (deleted.length > 0) console.log(`🗑️  ${deleted.length} alerte(s) supprimée(s) après 3 jours`);
-  } catch (err) { console.error("❌ Erreur suppression:", err.message); }
+    if (deleted.length > 0) console.log(`🗑️ ${deleted.length} alerte(s) supprimée(s) après 3 jours`);
+  } catch (err) { console.error("❌ Suppression auto:", err.message); }
 }
 
+/* ---- DÉMARRAGE ---- */
 async function start() {
   await initDB();
   const existing = await getAlerts("%");
@@ -344,4 +297,4 @@ async function start() {
   app.listen(PORT, () => console.log(`🚀 Port ${PORT}`));
 }
 
-start().catch(err => { console.error("❌ Erreur démarrage:", err); process.exit(1); });
+start().catch(err => { console.error("❌ Démarrage:", err); process.exit(1); });
