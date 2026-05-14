@@ -170,9 +170,11 @@ app.get("/tokens", async (req, res) => {
   catch { res.status(500).json({ error: "Erreur base de données" }); }
 });
 
+// Test push — filtré par userId si fourni
 app.get("/test-push", async (req, res) => {
-  await sendPush("🧪 Test Devises Alert", "Son et vibration OK !", { test: true });
-  res.json({ sent: true });
+  const userId = req.query.user || null;
+  await sendPush("🧪 Test Devises Alert", "Son et vibration OK !", { test: true }, userId);
+  res.json({ sent: true, targetUser: userId || "tous" });
 });
 
 /* ============================================================
@@ -184,8 +186,10 @@ app.post("/invite/validate", async (req, res) => {
   const { code, userId } = req.body;
   if (!code) return res.status(400).json({ error: "Code requis" });
   try {
-    const result = await validateCode(code);
+    // Passer userId pour permettre réinstallation sur même appareil
+    const result = await validateCode(code, userId);
     if (!result.valid) return res.status(403).json({ error: result.reason });
+    // Lier le code à cet userId seulement s'il n'est pas déjà utilisé
     if (result.role === "user") await markCodeUsed(code, userId || "unknown");
     res.json({ valid: true, role: result.role });
   } catch (err) {
@@ -196,10 +200,11 @@ app.post("/invite/validate", async (req, res) => {
 
 // Vérification au démarrage
 app.post("/invite/check", async (req, res) => {
-  const { code } = req.body;
+  const { code, userId } = req.body;
   if (!code) return res.status(400).json({ valid: false, reason: "Code requis" });
   try {
-    const result = await validateCode(code);
+    // Passer userId pour permettre réinstallation
+    const result = await validateCode(code, userId);
     res.json({ valid: result.valid, role: result.role, reason: result.reason });
   } catch (err) {
     console.error("❌ check:", err.message);

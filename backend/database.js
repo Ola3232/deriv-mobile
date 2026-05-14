@@ -139,7 +139,7 @@ export async function getTokens() {
 ============================================================ */
 const MASTER_CODE = "ADMIN-SADATH2024";
 
-export async function validateCode(code) {
+export async function validateCode(code, userId = null) {
   const upperCode = code.toUpperCase().trim();
 
   // Code maître — toujours valide, jamais révocable
@@ -154,8 +154,20 @@ export async function validateCode(code) {
   if (!result.rows.length) return { valid: false, reason: "Code invalide" };
   const row = result.rows[0];
   if (row.revoked === 1) return { valid: false, reason: "Code révoqué" };
+
+  // Admin et superadmin : toujours réutilisables
   const isReusable = row.role === 'admin' || row.role === 'superadmin';
-  if (row.used === 1 && !isReusable) return { valid: false, reason: "Code déjà utilisé" };
+  if (isReusable) return { valid: true, role: row.role, code: row.code };
+
+  // User : utilisé par quelqu'un d'autre → bloqué
+  // Mais si c'est le même userId → autorisé (réinstallation)
+  if (row.used === 1) {
+    if (userId && row.used_by === userId) {
+      return { valid: true, role: row.role, code: row.code };
+    }
+    return { valid: false, reason: "Code déjà utilisé" };
+  }
+
   return { valid: true, role: row.role, code: row.code };
 }
 
