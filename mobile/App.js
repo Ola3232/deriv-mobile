@@ -5,7 +5,7 @@ import * as SecureStore from "expo-secure-store";
 import * as Notifications from "expo-notifications";
 import { View, ActivityIndicator, AppState } from "react-native";
 
-const SERVER = "https://deriv-backend-1.onrender.com";
+const SERVER = "https://deriv-alerts.onrender.com";
 
 import HomeScreen   from "./Home.js";
 import ListAlert    from "./Alert.js";
@@ -37,7 +37,7 @@ export default function App() {
         // Vérification serveur en arrière-plan (révocation seulement)
         try {
           const uid = await SecureStore.getItemAsync("userId");
-          const res = await fetch("https://deriv-backend-1.onrender.com/invite/check", {
+          const res = await fetch("https://deriv-alerts.onrender.com/invite/check", {
             method:  "POST",
             headers: { "Content-Type": "application/json" },
             body:    JSON.stringify({ code, userId: uid }),

@@ -6,7 +6,7 @@ import {
 } from "react-native";
 import * as SecureStore from "expo-secure-store";
 
-const SERVER = "https://deriv-backend-1.onrender.com";
+const SERVER = "https://deriv-alerts.onrender.com";
 
 const C = {
   bg:      "#090D1A",

@@ -11,7 +11,7 @@ import * as SecureStore from "expo-secure-store";
 /* ============================================================
    CONFIG
 ============================================================ */
-const SERVER = "https://deriv-backend-1.onrender.com";
+const SERVER = "https://deriv-alerts.onrender.com";
 
 const ALERT_SOUNDS = [
   { id: "trading", name: "Trading", icon: "📈", channelId: "deriv-alerts-trading" },

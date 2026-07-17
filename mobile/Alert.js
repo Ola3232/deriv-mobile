@@ -6,7 +6,7 @@ import {
   RefreshControl, FlatList, Modal,
 } from "react-native";
 
-const SERVER = "https://deriv-backend-1.onrender.com";
+const SERVER = "https://deriv-alerts.onrender.com";
 
 async function getUserId() {
   try {
