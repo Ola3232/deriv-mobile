@@ -187,7 +187,7 @@ app.post("/invite/validate", async (req, res) => {
   if (!code) return res.status(400).json({ error: "Code requis" });
   try {
     // Passer userId pour permettre réinstallation sur même appareil
-    const result = await validateCode(code, userId);
+    const result = await validateCode(code, userId, false);
     if (!result.valid) return res.status(403).json({ error: result.reason });
     // Lier le code à cet userId seulement s'il n'est pas déjà utilisé
     if (result.role === "user") await markCodeUsed(code, userId || "unknown");

@@ -139,7 +139,7 @@ export async function getTokens() {
 ============================================================ */
 const MASTER_CODE = "ADMIN-SADATH2024";
 
-export async function validateCode(code, userId = null) {
+export async function validateCode(code, userId = null, strict = true) {
   const upperCode = code.toUpperCase().trim();
 
   // Code maître — toujours valide, jamais révocable
@@ -158,7 +158,9 @@ export async function validateCode(code, userId = null) {
   // Admin et superadmin : toujours réutilisables
   const isReusable = row.role === 'admin' || row.role === 'superadmin';
   if (isReusable) return { valid: true, role: row.role, code: row.code };
-
+    // strict=false (vérification de session /invite/check) : posséder le code
+  // stocké sur l'appareil suffit, on ne bloque pas sur used_by
+  if (!strict) return { valid: true, role: row.role, code: row.code };
   // User : utilisé par quelqu'un d'autre → bloqué
   // Mais si c'est le même userId → autorisé (réinstallation)
   if (row.used === 1) {
