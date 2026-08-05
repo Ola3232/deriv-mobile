@@ -8,6 +8,7 @@ import {
   saveToken, getTokens,
   validateCode, markCodeUsed, generateCode, getCodes, revokeCode,
 } from "./database.js";
+import { ASSETS } from "./assets.js";
 
 const app = express();
 app.use(cors());
@@ -17,7 +18,10 @@ app.use((req, res, next) => { res.setHeader("Content-Type", "application/json");
 /* ---- ÉTAT ---- */
 const subscribedSymbols = new Set();
 const lastPrices = {};
-let activeSymbols = [], ws = null, symbolsLoaded = false;
+let ws = null;
+// statut ouvert/fermé affiné en live quand possible (best-effort, non bloquant)
+const isOpenOverrides = {};
+let liveStatusOK = false;
 const cooldownMap = new Map();
 const COOLDOWN_MS = 2 * 60 * 60 * 1000;
 
@@ -42,27 +46,27 @@ async function sendPush(title, body, data = {}, targetUser = null, channelId = "
   }
 }
 
-/* ---- SYMBOLS ---- */
+/* ---- SYMBOLS ----
+   La liste des actifs vient désormais de assets.js (statique, en dur).
+   Ce WS est optionnel : il sert juste à rafraîchir le statut ouvert/fermé
+   (is_open) quand Deriv répond, mais /symbols ne dépend plus de lui. */
 function loadActiveSymbols() {
   const wsS = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
-  const t = setTimeout(() => { try { wsS.terminate(); } catch {} setTimeout(loadActiveSymbols, 30000); }, 15000);
+  const t = setTimeout(() => { try { wsS.terminate(); } catch {} setTimeout(loadActiveSymbols, 5 * 60 * 1000); }, 15000);
   wsS.on("open", () => wsS.send(JSON.stringify({ active_symbols: "brief", product_type: "basic" })));
   wsS.on("message", (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (!msg.active_symbols) return;
     clearTimeout(t);
-    activeSymbols = msg.active_symbols.filter(s => s.symbol && s.display_name).map(s => ({
-      symbol: s.symbol, display_name: s.display_name,
-      market: s.market || "", market_name: s.market_display_name || s.market || "Other",
-      submarket: s.submarket || "", submarket_name: s.submarket_display_name || "",
-      is_open: s.exchange_is_open === 1,
-    }));
-    symbolsLoaded = true;
-    console.log(`✅ ${activeSymbols.length} actifs chargés`);
+    for (const s of msg.active_symbols) {
+      if (s.symbol) isOpenOverrides[s.symbol] = s.exchange_is_open === 1;
+    }
+    liveStatusOK = true;
+    console.log(`✅ Statuts ouvert/fermé rafraîchis pour ${msg.active_symbols.length} actifs`);
     try { wsS.close(); } catch {}
     setTimeout(loadActiveSymbols, 5 * 60 * 1000);
   });
-  wsS.on("error", (err) => { clearTimeout(t); console.error("❌ WS symbols:", err.message); setTimeout(loadActiveSymbols, 15000); });
+  wsS.on("error", (err) => { clearTimeout(t); console.error("❌ WS symbols (statut only, non bloquant):", err.message); setTimeout(loadActiveSymbols, 60000); });
   wsS.on("close", () => clearTimeout(t));
 }
 
@@ -113,12 +117,12 @@ function subscribeSymbol(symbol) {
 /* ============================================================
    ROUTES
 ============================================================ */
-app.get("/", (req, res) => res.json({ status: "ok", uptime: Math.floor(process.uptime()), symbols_loaded: symbolsLoaded, symbols_count: activeSymbols.length, subscriptions: [...subscribedSymbols] }));
+app.get("/", (req, res) => res.json({ status: "ok", uptime: Math.floor(process.uptime()), symbols_count: ASSETS.length, live_status_ok: liveStatusOK, subscriptions: [...subscribedSymbols] }));
 
 app.get("/symbols", (req, res) => {
-  if (!symbolsLoaded || !activeSymbols.length) return res.status(503).json({ error: "loading", message: "Chargement en cours..." });
+  const list = ASSETS.map(s => ({ ...s, is_open: isOpenOverrides[s.symbol] ?? s.is_open }));
   const q = (req.query.q || "").toLowerCase().trim();
-  const symbols = q ? activeSymbols.filter(s => s.symbol.toLowerCase().includes(q) || s.display_name.toLowerCase().includes(q) || s.market_name.toLowerCase().includes(q)) : activeSymbols;
+  const symbols = q ? list.filter(s => s.symbol.toLowerCase().includes(q) || s.display_name.toLowerCase().includes(q) || s.market_name.toLowerCase().includes(q)) : list;
   const grouped = {};
   for (const s of symbols) { const k = s.market_name || "Autres"; if (!grouped[k]) grouped[k] = []; grouped[k].push(s); }
   res.json({ total: symbols.length, markets: grouped });
