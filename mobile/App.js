@@ -24,7 +24,8 @@ export default function App() {
       try {
         const code = await SecureStore.getItemAsync("inviteCode");
         const role = await SecureStore.getItemAsync("userRole");
-
+        const uid = await SecureStore.getItemAsync("userId");
+        console.log("DEBUG code:", code, "role:", role, "userId:", uid);
         // Pas de code sauvegardé → demander le code
         if (!code) { setChecking(false); return; }
 

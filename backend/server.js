@@ -17,6 +17,7 @@ app.use((req, res, next) => { res.setHeader("Content-Type", "application/json");
 
 /* ---- ÉTAT ---- */
 const subscribedSymbols = new Set();
+let pingInterval = null;
 const lastPrices = {};
 let ws = null;
 // statut ouvert/fermé affiné en live quand possible (best-effort, non bloquant)
@@ -71,9 +72,17 @@ function loadActiveSymbols() {
 }
 
 /* ---- DERIV WS ---- */
+
 function connectDeriv() {
   ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
-  ws.on("open", () => { console.log("✅ Connecté Deriv"); for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 })); });
+  ws.on("open", () => {
+    console.log("✅ Connecté Deriv");
+    for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 }));
+    if (pingInterval) clearInterval(pingInterval);
+    pingInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: 1 }));
+    }, 30000);
+  });
   ws.on("message", async (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (!msg.tick) return;
@@ -104,16 +113,34 @@ function connectDeriv() {
       await sendPush(titleMap[type] || titleMap.alert, body, { alertId: alert.id, symbol, price, threshold: alert.price, condition: alert.condition }, alert.user, chMap[alert.sound || "trading"] || "deriv-alerts-trading");
     }
   });
-  ws.on("close", (code) => { ws = null; setTimeout(connectDeriv, 5000); });
+  ws.on("close", (code) => {
+    ws = null;
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+    setTimeout(connectDeriv, 5000);
+  });
   ws.on("error", (err) => console.error("❌ WS ticks:", err.message));
 }
-
 function subscribeSymbol(symbol) {
   if (subscribedSymbols.has(symbol)) return;
   subscribedSymbols.add(symbol);
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
 }
-
+/* ---- PRIX PONCTUEL (fallback si pas encore de tick en cache) ---- */
+function fetchOncePrice(symbol, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (val) => { if (done) return; done = true; try { sock.close(); } catch {} resolve(val); };
+    const sock = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
+    const t = setTimeout(() => finish(null), timeoutMs);
+    sock.on("open", () => sock.send(JSON.stringify({ ticks_history: symbol, end: "latest", count: 1, style: "ticks" })));
+    sock.on("message", (raw) => {
+      let msg; try { msg = JSON.parse(raw); } catch { return; }
+      if (msg.error) { clearTimeout(t); finish(null); return; }
+      if (msg.history?.prices?.length) { clearTimeout(t); finish(Number(msg.history.prices.at(-1))); }
+    });
+    sock.on("error", () => { clearTimeout(t); finish(null); });
+  });
+}
 /* ============================================================
    ROUTES
 ============================================================ */
@@ -140,7 +167,8 @@ app.post("/alerts", async (req, res) => {
   if (price == null || isNaN(Number(price)) || Number(price) <= 0) return res.status(400).json({ error: "Prix invalide" });
   const numPrice = Number(price);
   subscribeSymbol(asset);
-  const cur = lastPrices[asset];
+  let cur = lastPrices[asset];
+  if (cur == null) { cur = await fetchOncePrice(asset); if (cur != null) lastPrices[asset] = cur; }
   if (cur != null) {
     const already = (condition === "over" && cur >= numPrice) || (condition === "under" && cur <= numPrice);
     if (already) return res.status(409).json({ error: "already_triggered", message: `Prix actuel de ${asset} (${cur}) déjà ${condition === "over" ? "au-dessus" : "en-dessous"} de ${numPrice}.`, currentPrice: cur });
