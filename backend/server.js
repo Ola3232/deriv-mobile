@@ -110,6 +110,13 @@ function connectDeriv() {
       const body = `${prefixMap[type] || "Niveau atteint"} — ${symbol} ${dir} de ${alert.price}\nPrix actuel : ${price.toFixed(4)}`;
       console.log(`🔔 [ALERT #${alert.id} user=${alert.user}] ${body}`);
       const chMap = { trading: "deriv-alerts-trading", alarm: "deriv-alerts-alarm", pulse: "deriv-alerts-pulse" };
+      console.log("🚨 Envoi notification", {
+        user: alert.user,
+        symbol,
+        price,
+        threshold: alert.price,
+        condition: alert.condition,
+      });
       await sendPush(titleMap[type] || titleMap.alert, body, { alertId: alert.id, symbol, price, threshold: alert.price, condition: alert.condition }, alert.user, chMap[alert.sound || "trading"] || "deriv-alerts-trading");
     }
   });
