@@ -85,6 +85,7 @@ function connectDeriv() {
   });
   ws.on("message", async (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
+    if (msg.error) { console.error("❌ Deriv error:", msg.msg_type, JSON.stringify(msg.error)); return; }
     if (!msg.tick) return;
     const { quote: price, symbol } = msg.tick;
     lastPrices[symbol] = price;
