@@ -52,7 +52,7 @@ async function sendPush(title, body, data = {}, targetUser = null, channelId = "
    Ce WS est optionnel : il sert juste à rafraîchir le statut ouvert/fermé
    (is_open) quand Deriv répond, mais /symbols ne dépend plus de lui. */
 function loadActiveSymbols() {
-  const wsS = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=342XaybP57SYKVVJvW8DO");
+  const wsS = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
   const t = setTimeout(() => { try { wsS.terminate(); } catch {} setTimeout(loadActiveSymbols, 5 * 60 * 1000); }, 15000);
   wsS.on("open", () => wsS.send(JSON.stringify({ active_symbols: "brief", product_type: "basic" })));
   wsS.on("message", (raw) => {
@@ -74,7 +74,7 @@ function loadActiveSymbols() {
 /* ---- DERIV WS ---- */
 
 function connectDeriv() {
-  ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=342XaybP57SYKVVJvW8DO");
+  ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
   ws.on("open", () => {
     console.log("✅ Connecté Deriv");
     for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 }));
@@ -138,7 +138,7 @@ function fetchOncePrice(symbol, timeoutMs = 4000) {
   return new Promise((resolve) => {
     let done = false;
     const finish = (val) => { if (done) return; done = true; try { sock.close(); } catch {} resolve(val); };
-    const sock = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=342XaybP57SYKVVJvW8DO");
+    const sock = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
     const t = setTimeout(() => finish(null), timeoutMs);
     sock.on("open", () => sock.send(JSON.stringify({ ticks_history: symbol, end: "latest", count: 1, style: "ticks" })));
     sock.on("message", (raw) => {
