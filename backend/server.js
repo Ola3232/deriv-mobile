@@ -77,6 +77,7 @@ function connectDeriv() {
   ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
   ws.on("open", () => {
     console.log("✅ Connecté Deriv");
+    if (process.env.DERIV_API_TOKEN) ws.send(JSON.stringify({ authorize: process.env.DERIV_API_TOKEN }));
     for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 }));
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
@@ -85,6 +86,7 @@ function connectDeriv() {
   });
   ws.on("message", async (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
+    if (msg.authorize) console.log("✅ Authorize OK, account:", msg.authorize.loginid);
 if (msg.error) {
       console.error("❌ Deriv error:", msg.msg_type, JSON.stringify(msg.error));
       const failedSymbol = msg.echo_req && msg.echo_req.ticks;
@@ -155,7 +157,6 @@ function fetchOncePrice(symbol, timeoutMs = 4000) {
     sock.on("open", () => sock.send(JSON.stringify({ ticks_history: symbol, end: "latest", count: 1, style: "ticks" })));
     sock.on("message", (raw) => {
       let msg; try { msg = JSON.parse(raw); } catch { return; }
-      if (msg.authorize) { console.log("✅ Authorize OK, account:", msg.authorize.loginid); }
       if (msg.error) { clearTimeout(t); finish(null); return; }
       if (msg.history?.prices?.length) { clearTimeout(t); finish(Number(msg.history.prices.at(-1))); }
     });
