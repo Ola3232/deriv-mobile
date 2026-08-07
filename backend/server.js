@@ -85,8 +85,20 @@ function connectDeriv() {
   });
   ws.on("message", async (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
-    if (msg.error) { console.error("❌ Deriv error:", msg.msg_type, JSON.stringify(msg.error)); return; }
-    if (!msg.tick) return;
+if (msg.error) {
+      console.error("❌ Deriv error:", msg.msg_type, JSON.stringify(msg.error));
+      const failedSymbol = msg.echo_req && msg.echo_req.ticks;
+      if (failedSymbol && msg.msg_type === "tick") {
+        setTimeout(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            console.log(`🔁 Nouvelle tentative d'abonnement: ${failedSymbol}`);
+            ws.send(JSON.stringify({ ticks: failedSymbol, subscribe: 1 }));
+          }
+        }, 5000);
+      }
+      return;
+    }
+        if (!msg.tick) return;
     const { quote: price, symbol } = msg.tick;
     lastPrices[symbol] = price;
     let alerts; try { alerts = await getAlerts("%"); } catch { return; }
