@@ -77,8 +77,7 @@ function connectDeriv() {
   ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
   ws.on("open", () => {
     console.log("✅ Connecté Deriv");
-    if (process.env.DERIV_API_TOKEN) ws.send(JSON.stringify({ authorize: process.env.DERIV_API_TOKEN }));
-    for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 }));
+if (process.env.DERIV_API_TOKEN) ws.send(JSON.stringify({ authorize: process.env.DERIV_API_TOKEN.replace(/^pat_/, "") }));    for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 }));
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: 1 }));
