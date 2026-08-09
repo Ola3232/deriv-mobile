@@ -77,7 +77,6 @@ function connectDeriv() {
   ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
   ws.on("open", () => {
     console.log("✅ Connecté Deriv");
-if (process.env.DERIV_API_TOKEN) ws.send(JSON.stringify({ authorize: process.env.DERIV_API_TOKEN.replace(/^pat_/, "") }));    for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 }));
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: 1 }));
@@ -89,14 +88,7 @@ if (process.env.DERIV_API_TOKEN) ws.send(JSON.stringify({ authorize: process.env
 if (msg.error) {
       console.error("❌ Deriv error:", msg.msg_type, JSON.stringify(msg.error));
       const failedSymbol = msg.echo_req && msg.echo_req.ticks;
-      if (failedSymbol && msg.msg_type === "tick") {
-        setTimeout(() => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            console.log(`🔁 Nouvelle tentative d'abonnement: ${failedSymbol}`);
-            ws.send(JSON.stringify({ ticks: failedSymbol, subscribe: 1 }));
-          }
-        }, 5000);
-      }
+
       return;
     }
         if (!msg.tick) return;
@@ -137,7 +129,6 @@ if (msg.error) {
   ws.on("close", (code) => {
     ws = null;
     if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
-    setTimeout(connectDeriv, 5000);
   });
   ws.on("error", (err) => console.error("❌ WS ticks:", err.message));
 }
