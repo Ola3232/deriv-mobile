@@ -152,8 +152,8 @@ function fetchOncePrice(symbol, timeoutMs = 4000) {
     const t = setTimeout(() => finish(null), timeoutMs);
     sock.on("open", () => sock.send(JSON.stringify({ ticks_history: symbol, end: "latest", count: 1, style: "ticks" })));
     sock.on("message", (raw) => {
-      let msg; try { msg = JSON.parse(raw); } catch { return; }
-      if (msg.error) { clearTimeout(t); finish(null); return; }
+    let msg; try { msg = JSON.parse(raw); } catch { return; }
+    console.log("📨 msg_type:", msg.msg_type);      if (msg.error) { clearTimeout(t); finish(null); return; }
       if (msg.history?.prices?.length) { clearTimeout(t); finish(Number(msg.history.prices.at(-1))); }
     });
     sock.on("error", () => { clearTimeout(t); finish(null); });
