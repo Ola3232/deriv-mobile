@@ -73,10 +73,11 @@ function loadActiveSymbols() {
 
 /* ---- DERIV WS ---- */
 
-function connectDeriv() {
+ffunction connectDeriv() {
   ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
   ws.on("open", () => {
     console.log("✅ Connecté Deriv");
+    for (const s of subscribedSymbols) ws.send(JSON.stringify({ ticks: s, subscribe: 1 }));
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: 1 }));
@@ -84,22 +85,15 @@ function connectDeriv() {
   });
   ws.on("message", async (raw) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
+    console.log("📨 msg_type:", msg.msg_type);
     if (msg.authorize) console.log("✅ Authorize OK, account:", msg.authorize.loginid);
-if (msg.error) {
+    if (msg.error) {
       console.error("❌ Deriv error:", msg.msg_type, JSON.stringify(msg.error));
-      const failedSymbol = msg.echo_req && msg.echo_req.ticks;
-
       return;
     }
-        if (!msg.tick) return;
+    if (!msg.tick) return;
     const { quote: price, symbol } = msg.tick;
     lastPrices[symbol] = price;
-    if (!global.__lastTickLog) global.__lastTickLog = {};
-    const _now = Date.now();
-    if (!global.__lastTickLog[symbol] || _now - global.__lastTickLog[symbol] > 60000) {
-      global.__lastTickLog[symbol] = _now;
-      console.log(`📈 Tick reçu ${symbol}: ${price}`);
-    }
     let alerts; try { alerts = await getAlerts("%"); } catch { return; }
     for (const alert of alerts) {
       if (alert.asset !== symbol) continue;
@@ -122,19 +116,14 @@ if (msg.error) {
       const body = `${prefixMap[type] || "Niveau atteint"} — ${symbol} ${dir} de ${alert.price}\nPrix actuel : ${price.toFixed(4)}`;
       console.log(`🔔 [ALERT #${alert.id} user=${alert.user}] ${body}`);
       const chMap = { trading: "deriv-alerts-trading", alarm: "deriv-alerts-alarm", pulse: "deriv-alerts-pulse" };
-      console.log("🚨 Envoi notification", {
-        user: alert.user,
-        symbol,
-        price,
-        threshold: alert.price,
-        condition: alert.condition,
-      });
       await sendPush(titleMap[type] || titleMap.alert, body, { alertId: alert.id, symbol, price, threshold: alert.price, condition: alert.condition }, alert.user, chMap[alert.sound || "trading"] || "deriv-alerts-trading");
     }
   });
   ws.on("close", (code) => {
+    console.log("⚠️ Connexion Deriv fermée, code:", code, "— reconnexion dans 5s");
     ws = null;
     if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+    setTimeout(connectDeriv, 5000);
   });
   ws.on("error", (err) => console.error("❌ WS ticks:", err.message));
 }
