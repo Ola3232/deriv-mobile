@@ -94,6 +94,12 @@ if (msg.error) {
         if (!msg.tick) return;
     const { quote: price, symbol } = msg.tick;
     lastPrices[symbol] = price;
+    if (!global.__lastTickLog) global.__lastTickLog = {};
+    const _now = Date.now();
+    if (!global.__lastTickLog[symbol] || _now - global.__lastTickLog[symbol] > 60000) {
+      global.__lastTickLog[symbol] = _now;
+      console.log(`📈 Tick reçu ${symbol}: ${price}`);
+    }
     let alerts; try { alerts = await getAlerts("%"); } catch { return; }
     for (const alert of alerts) {
       if (alert.asset !== symbol) continue;
